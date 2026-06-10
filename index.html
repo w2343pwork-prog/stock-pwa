@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="損益追蹤" />
+  <meta name="theme-color" content="#0a0f1e" />
+  <title>損益追蹤</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+
+  <style>
+    /* ── TOKENS ── */
+    :root {
+      --bg:        #0a0f1e;
+      --surface:   #111827;
+      --surface2:  #1a2235;
+      --border:    #1f2d45;
+      --accent:    #3b82f6;
+      --accent2:   #60a5fa;
+      --gain:      #34d399;
+      --loss:      #f87171;
+      --neutral:   #94a3b8;
+      --text:      #f1f5f9;
+      --text2:     #94a3b8;
+      --font-num:  'SF Mono', 'Fira Code', 'Courier New', monospace;
+      --font-ui:   -apple-system, 'Helvetica Neue', sans-serif;
+      --r:         14px;
+      --r-sm:      8px;
+      --safe-top:  env(safe-area-inset-top, 0px);
+      --safe-bot:  env(safe-area-inset-bottom, 0px);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%; min-height: 100dvh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-ui);
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
+    }
+
+    /* ── LAYOUT ── */
+    .app {
+      max-width: 430px;
+      margin: 0 auto;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      padding-top: calc(var(--safe-top) + 12px);
+      padding-bottom: calc(var(--safe-bot) + 80px);
+    }
+
+    /* ── HEADER ── */
+    .header {
+      padding: 0 20px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-title {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .header-title span { color: var(--accent2); }
+
+    .refresh-btn {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text2);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      transition: color .2s, transform .3s;
+    }
+    .refresh-btn:active { transform: rotate(180deg); color: var(--accent2); }
+    .refresh-btn.loading { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── UPDATE TIME ── */
+    .update-time {
+      padding: 0 20px 10px;
+      font-size: 11px;
+      color: var(--text2);
+      font-family: var(--font-num);
+    }
+
+    /* ── SUMMARY CARDS ── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      padding: 0 20px 10px;
+    }
+    .summary-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 14px 16px;
+    }
+    .summary-card.full { grid-column: 1 / -1; }
+    .summary-card.highlight {
+      border-color: var(--accent);
+      background: linear-gradient(135deg, #111827 0%, #0f1d35 100%);
+    }
+    .s-label {
+      font-size: 11px;
+      color: var(--text2);
+      letter-spacing: .5px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .s-value {
+      font-family: var(--font-num);
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .s-value.big { font-size: 28px; }
+    .s-value.gain { color: var(--gain); }
+    .s-value.loss { color: var(--loss); }
+    .s-value.neutral { color: var(--text); }
+    .s-sub {
+      font-size: 11px;
+      color: var(--text2);
+      margin-top: 4px;
+      font-family: var(--font-num);
+    }
+
+    /* ── SECTION HEADER ── */
+    .section-header {
+      padding: 14px 20px 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text2);
+      text-transform: uppercase;
+      letter-spacing: .8px;
+    }
+    .add-btn {
+      padding: 6px 14px;
+      border-radius: 20px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .add-btn:active { opacity: .7; }
+
+    /* ── TABS ── */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 0 20px 8px;
+    }
+    .tab {
+      padding: 7px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text2);
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    /* ── HOLDINGS LIST ── */
+    .holdings-list {
+      padding: 0 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .holding-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 14px 16px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 4px 12px;
+      cursor: pointer;
+      transition: border-color .15s;
+      position: relative;
+      overflow: hidden;
+    }
+    .holding-card::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+    }
+    .holding-card.gain-card::before { background: var(--gain); }
+    .holding-card.loss-card::before { background: var(--loss); }
+    .holding-card:active { border-color: var(--accent); }
+
+    .hc-name {
+      font-weight: 600;
+      font-size: 15px;
+      grid-column: 1;
+    }
+    .hc-market {
+      font-size: 10px;
+      font-weight: 500;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--surface2);
+      color: var(--text2);
+      align-self: center;
+      letter-spacing: .4px;
+    }
+    .hc-detail {
+      font-size: 12px;
+      color: var(--text2);
+      font-family: var(--font-num);
+      grid-column: 1;
+    }
+    .hc-pnl {
+      font-family: var(--font-num);
+      font-size: 16px;
+      font-weight: 700;
+      text-align: right;
+      grid-column: 2;
+      grid-row: 1 / 3;
+      align-self: center;
+    }
+    .hc-pnl.gain { color: var(--gain); }
+    .hc-pnl.loss { color: var(--loss); }
+    .hc-pct {
+      font-size: 11px;
+      text-align: right;
+      margin-top: 2px;
+      font-family: var(--font-num);
+    }
+
+    /* ── REALIZED LIST ── */
+    .realized-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .rc-left { flex: 1; }
+    .rc-name { font-weight: 600; font-size: 15px; }
+    .rc-detail { font-size: 12px; color: var(--text2); font-family: var(--font-num); margin-top: 2px; }
+    .rc-right { text-align: right; }
+    .rc-pnl { font-family: var(--font-num); font-size: 16px; font-weight: 700; }
+    .rc-pnl.gain { color: var(--gain); }
+    .rc-pnl.loss { color: var(--loss); }
+
+    /* ── EMPTY STATE ── */
+    .empty-state {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--text2);
+    }
+    .empty-icon { font-size: 40px; margin-bottom: 12px; }
+    .empty-text { font-size: 15px; }
+
+    /* ── BOTTOM NAV ── */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0; left: 50%;
+      transform: translateX(-50%);
+      width: 100%;
+      max-width: 430px;
+      padding: 10px 20px calc(var(--safe-bot) + 10px);
+      background: rgba(10,15,30,.85);
+      backdrop-filter: saturate(180%) blur(20px);
+      -webkit-backdrop-filter: saturate(180%) blur(20px);
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-around;
+    }
+    .nav-item {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 3px; cursor: pointer; padding: 4px 16px;
+      color: var(--text2); font-size: 10px;
+      border: none; background: none; transition: color .15s;
+    }
+    .nav-item.active { color: var(--accent2); }
+    .nav-icon { font-size: 20px; line-height: 1; }
+
+    /* ── MODAL ── */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.6);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      z-index: 100;
+      display: flex; align-items: flex-end; justify-content: center;
+      opacity: 0; pointer-events: none;
+      transition: opacity .2s;
+    }
+    .modal-overlay.show { opacity: 1; pointer-events: all; }
+    .modal {
+      width: 100%; max-width: 430px;
+      background: var(--surface);
+      border-radius: 24px 24px 0 0;
+      padding: 24px 24px calc(var(--safe-bot) + 24px);
+      transform: translateY(100%);
+      transition: transform .3s cubic-bezier(.32,1,.4,1);
+      border-top: 1px solid var(--border);
+    }
+    .modal-overlay.show .modal { transform: translateY(0); }
+
+    .modal-handle {
+      width: 36px; height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      margin: 0 auto 20px;
+    }
+    .modal-title {
+      font-size: 18px; font-weight: 700;
+      margin-bottom: 20px;
+    }
+
+    .form-group { margin-bottom: 14px; }
+    .form-label { font-size: 12px; color: var(--text2); margin-bottom: 6px; display: block; letter-spacing: .4px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    input, select {
+      width: 100%; padding: 12px 14px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      color: var(--text);
+      font-size: 16px; /* prevent zoom on iOS */
+      font-family: var(--font-ui);
+      outline: none;
+      transition: border-color .15s;
+      -webkit-appearance: none;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    select option { background: var(--surface); }
+
+    .form-actions { display: flex; gap: 10px; margin-top: 20px; }
+    .btn-cancel {
+      flex: 1; padding: 14px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      color: var(--text2);
+      font-size: 15px; font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-save {
+      flex: 2; padding: 14px;
+      background: var(--accent);
+      border: none;
+      border-radius: var(--r-sm);
+      color: #fff;
+      font-size: 15px; font-weight: 700;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    .btn-save:active { opacity: .8; }
+
+    .btn-delete {
+      width: 100%; padding: 14px;
+      background: rgba(248,113,113,.12);
+      border: 1px solid rgba(248,113,113,.3);
+      border-radius: var(--r-sm);
+      color: var(--loss);
+      font-size: 15px; font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    /* Segment sell */
+    .seg-group {
+      display: flex;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      padding: 3px;
+      gap: 3px;
+    }
+    .seg-btn {
+      flex: 1; padding: 8px;
+      border-radius: 6px;
+      border: none;
+      font-size: 13px; font-weight: 600;
+      cursor: pointer;
+      background: transparent; color: var(--text2);
+      transition: all .15s;
+    }
+    .seg-btn.active { background: var(--accent); color: #fff; }
+
+    /* pages */
+    .page { display: none; flex: 1; overflow-y: auto; }
+    .page.active { display: block; }
+
+    /* settings page */
+    .settings-section { padding: 0 20px 16px; }
+    .settings-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 10px; padding-top: 14px; }
+    .settings-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+    .settings-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .settings-row:last-child { border-bottom: none; }
+    .settings-row-label { font-size: 15px; }
+    .settings-row-value { font-family: var(--font-num); color: var(--text2); font-size: 14px; }
+    .settings-row-btn {
+      font-size: 13px; color: var(--accent2);
+      background: none; border: none; cursor: pointer; padding: 0;
+    }
+
+    /* toast */
+    .toast {
+      position: fixed; top: calc(var(--safe-top) + 60px); left: 50%;
+      transform: translateX(-50%) translateY(-20px);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 10px 20px;
+      font-size: 13px; font-weight: 500;
+      opacity: 0; pointer-events: none;
+      transition: all .3s;
+      z-index: 200;
+      white-space: nowrap;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* price tag */
+    .price-tag {
+      font-size: 11px;
+      color: var(--text2);
+      font-family: var(--font-num);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      margin-left: 6px;
+      display: inline-block;
+    }
+    .price-loading { color: var(--neutral); font-size: 11px; font-family: var(--font-num); }
+  </style>
+</head>
+<body>
+
+<div class="app">
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-title">股票 <span>損益</span></div>
+    <button class="refresh-btn" id="refreshBtn" title="更新股價">↻</button>
+  </div>
+  <div class="update-time" id="updateTime">尚未更新</div>
+
+  <!-- 總覽頁 -->
+  <div class="page active" id="page-overview">
+    <div class="summary-grid">
+      <div class="summary-card full highlight">
+        <div class="s-label">資產淨值</div>
+        <div class="s-value big neutral" id="s-nav">—</div>
+        <div class="s-sub" id="s-nav-sub">本金 + 已實現損益 + 持倉市值</div>
+      </div>
+      <div class="summary-card">
+        <div class="s-label">未實現損益</div>
+        <div class="s-value" id="s-unrealized">—</div>
+        <div class="s-sub" id="s-unrealized-pct">—</div>
+      </div>
+      <div class="summary-card">
+        <div class="s-label">已實現損益</div>
+        <div class="s-value" id="s-realized">—</div>
+      </div>
+      <div class="summary-card">
+        <div class="s-label">本金</div>
+        <div class="s-value neutral" id="s-capital">—</div>
+      </div>
+      <div class="summary-card">
+        <div class="s-label">持倉市值</div>
+        <div class="s-value neutral" id="s-mktval">—</div>
+      </div>
+    </div>
+
+    <div class="section-header">
+      <div class="section-title">持倉</div>
+      <button class="add-btn" id="addHoldingBtn">＋ 新增</button>
+    </div>
+    <div class="holdings-list" id="holdingsList"></div>
+  </div>
+
+  <!-- 已實現頁 -->
+  <div class="page" id="page-realized">
+    <div class="section-header">
+      <div class="section-title">已實現損益</div>
+      <button class="add-btn" id="addRealizedBtn">＋ 新增</button>
+    </div>
+    <div class="holdings-list" id="realizedList"></div>
+  </div>
+
+  <!-- 設定頁 -->
+  <div class="page" id="page-settings">
+    <div class="settings-section">
+      <div class="settings-title">帳戶設定</div>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div class="settings-row-label">本金</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div class="settings-row-value" id="capitalDisplay">—</div>
+            <button class="settings-row-btn" id="editCapitalBtn">編輯</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">匯率 (USD → TWD)</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div class="settings-row-value" id="fxDisplay">—</div>
+            <button class="settings-row-btn" id="editFxBtn">編輯</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-title">關於</div>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div class="settings-row-label">股價來源</div>
+          <div class="settings-row-value">Yahoo Finance</div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-label">版本</div>
+          <div class="settings-row-value">1.0.0</div>
+        </div>
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-title">資料</div>
+      <div class="settings-card">
+        <div class="settings-row" style="cursor:pointer;" id="exportBtn">
+          <div class="settings-row-label">匯出資料 (JSON)</div>
+          <div class="settings-row-value">→</div>
+        </div>
+        <div class="settings-row" style="cursor:pointer;" id="clearDataBtn">
+          <div class="settings-row-label" style="color:var(--loss)">清除所有資料</div>
+          <div class="settings-row-value">→</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- BOTTOM NAV -->
+<nav class="bottom-nav">
+  <button class="nav-item active" data-page="overview">
+    <span class="nav-icon">📊</span><span>總覽</span>
+  </button>
+  <button class="nav-item" data-page="realized">
+    <span class="nav-icon">✅</span><span>已實現</span>
+  </button>
+  <button class="nav-item" data-page="settings">
+    <span class="nav-icon">⚙️</span><span>設定</span>
+  </button>
+</nav>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- MODAL: 新增/編輯持倉 -->
+<div class="modal-overlay" id="holdingModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="holdingModalTitle">新增持倉</div>
+
+    <div class="form-group">
+      <label class="form-label">股票代號 (e.g. AAPL, 2330.TW)</label>
+      <input type="text" id="h-symbol" placeholder="AAPL / 2330.TW" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">股票名稱 (選填)</label>
+      <input type="text" id="h-name" placeholder="Apple / 台積電" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">市場</label>
+      <select id="h-market">
+        <option value="US">🇺🇸 美股 (USD)</option>
+        <option value="TW">🇹🇼 台股 (TWD)</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">買入股數</label>
+        <input type="number" id="h-shares" placeholder="100" min="0.001" step="any"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">買入均價</label>
+        <input type="number" id="h-cost" placeholder="150.00" min="0" step="any"/>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn-cancel" id="holdingCancel">取消</button>
+      <button class="btn-save" id="holdingSave">儲存</button>
+    </div>
+    <button class="btn-delete" id="holdingDelete" style="display:none">刪除這筆持倉</button>
+  </div>
+</div>
+
+<!-- MODAL: 新增已實現 -->
+<div class="modal-overlay" id="realizedModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="realizedModalTitle">新增已實現損益</div>
+
+    <div class="form-group">
+      <label class="form-label">股票代號</label>
+      <input type="text" id="r-symbol" placeholder="TSLA / 0050.TW" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">股票名稱 (選填)</label>
+      <input type="text" id="r-name" placeholder="Tesla / 元大台灣50"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">市場</label>
+      <select id="r-market">
+        <option value="US">🇺🇸 美股 (USD)</option>
+        <option value="TW">🇹🇼 台股 (TWD)</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">股數</label>
+        <input type="number" id="r-shares" placeholder="100" min="0.001" step="any"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">買入均價</label>
+        <input type="number" id="r-cost" placeholder="150.00" min="0" step="any"/>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">賣出價格</label>
+        <input type="number" id="r-sell" placeholder="200.00" min="0" step="any"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">賣出日期</label>
+        <input type="date" id="r-date" />
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn-cancel" id="realizedCancel">取消</button>
+      <button class="btn-save" id="realizedSave">儲存</button>
+    </div>
+    <button class="btn-delete" id="realizedDelete" style="display:none">刪除這筆記錄</button>
+  </div>
+</div>
+
+<!-- MODAL: 本金 -->
+<div class="modal-overlay" id="capitalModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">設定本金</div>
+    <div class="form-group">
+      <label class="form-label">本金金額 (TWD)</label>
+      <input type="number" id="capitalInput" placeholder="1000000" min="0" step="any"/>
+    </div>
+    <div class="form-actions">
+      <button class="btn-cancel" id="capitalCancel">取消</button>
+      <button class="btn-save" id="capitalSave">儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: 匯率 -->
+<div class="modal-overlay" id="fxModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">設定匯率</div>
+    <div class="form-group">
+      <label class="form-label">1 USD = ? TWD</label>
+      <input type="number" id="fxInput" placeholder="32.5" min="1" step="0.01"/>
+    </div>
+    <div class="form-actions">
+      <button class="btn-cancel" id="fxCancel">取消</button>
+      <button class="btn-save" id="fxSave">儲存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────
+let state = {
+  capital: 0,
+  fx: 32.5,         // USD to TWD
+  holdings: [],     // { id, symbol, name, market, shares, cost }
+  realized: [],     // { id, symbol, name, market, shares, cost, sell, date }
+  prices: {},       // { symbol: price }
+  lastUpdate: null
+};
+
+let editingHoldingId = null;
+let editingRealizedId = null;
+
+// ─── STORAGE ─────────────────────────────────────────
+function save() {
+  localStorage.setItem('stockpwa_v1', JSON.stringify({
+    capital: state.capital,
+    fx: state.fx,
+    holdings: state.holdings,
+    realized: state.realized,
+    prices: state.prices,
+    lastUpdate: state.lastUpdate
+  }));
+}
+function load() {
+  try {
+    const d = JSON.parse(localStorage.getItem('stockpwa_v1') || '{}');
+    if (d.capital !== undefined) state.capital = d.capital;
+    if (d.fx)        state.fx = d.fx;
+    if (d.holdings)  state.holdings = d.holdings;
+    if (d.realized)  state.realized = d.realized;
+    if (d.prices)    state.prices = d.prices;
+    if (d.lastUpdate) state.lastUpdate = d.lastUpdate;
+  } catch(e) {}
+}
+
+// ─── UTILS ───────────────────────────────────────────
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
+function fmtNum(n, dec=0) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  const s = Math.abs(n).toLocaleString('zh-TW', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  return (n < 0 ? '-' : '') + s;
+}
+function fmtMoney(n, dec=0) {
+  if (n === null || isNaN(n)) return '—';
+  const s = Math.abs(n).toLocaleString('zh-TW', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  return (n < 0 ? '-' : '+') + '$' + s;
+}
+function pnlClass(n) {
+  if (n > 0) return 'gain';
+  if (n < 0) return 'loss';
+  return 'neutral';
+}
+
+// Convert to TWD
+function toTWD(amount, market) {
+  if (market === 'US') return amount * state.fx;
+  return amount;
+}
+
+// ─── PRICE FETCH ─────────────────────────────────────
+// Use Yahoo Finance proxy via allorigins
+async function fetchPrice(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+  const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+  const res = await fetch(proxy);
+  if (!res.ok) throw new Error('fetch failed');
+  const data = await res.json();
+  const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+  if (!price) throw new Error('no price');
+  return price;
+}
+
+async function refreshPrices() {
+  const btn = document.getElementById('refreshBtn');
+  btn.classList.add('loading');
+  showToast('正在更新股價...');
+  
+  const symbols = [...new Set(state.holdings.map(h => h.symbol))];
+  if (symbols.length === 0) {
+    btn.classList.remove('loading');
+    showToast('尚無持倉，請先新增股票');
+    return;
+  }
+
+  let updated = 0, failed = [];
+  for (const sym of symbols) {
+    try {
+      const price = await fetchPrice(sym);
+      state.prices[sym] = price;
+      updated++;
+    } catch(e) {
+      failed.push(sym);
+    }
+  }
+
+  state.lastUpdate = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+  save();
+  render();
+  btn.classList.remove('loading');
+
+  if (failed.length > 0) {
+    showToast(`更新完成，${failed.join('/')} 取得失敗`);
+  } else {
+    showToast(`✓ 已更新 ${updated} 支股票`);
+  }
+}
+
+// ─── CALCULATIONS ────────────────────────────────────
+function calcSummary() {
+  // Unrealized PnL (in TWD)
+  let unrealizedTWD = 0;
+  let costTWD = 0;
+  let mktValTWD = 0;
+  let allPriced = true;
+
+  for (const h of state.holdings) {
+    const price = state.prices[h.symbol];
+    if (!price) { allPriced = false; continue; }
+    const mkt = price * h.shares;
+    const cost = h.cost * h.shares;
+    const pnl = (price - h.cost) * h.shares;
+    unrealizedTWD += toTWD(pnl, h.market);
+    costTWD += toTWD(cost, h.market);
+    mktValTWD += toTWD(mkt, h.market);
+  }
+
+  // Realized PnL (in TWD)
+  let realizedTWD = 0;
+  for (const r of state.realized) {
+    const pnl = (r.sell - r.cost) * r.shares;
+    realizedTWD += toTWD(pnl, r.market);
+  }
+
+  const nav = state.capital + realizedTWD + mktValTWD;
+
+  return { unrealizedTWD, realizedTWD, costTWD, mktValTWD, nav, allPriced };
+}
+
+// ─── RENDER ──────────────────────────────────────────
+function render() {
+  renderSummary();
+  renderHoldings();
+  renderRealized();
+  renderSettings();
+  document.getElementById('updateTime').textContent = state.lastUpdate
+    ? `上次更新：${state.lastUpdate}`
+    : '尚未更新股價，點右上角 ↻ 更新';
+}
+
+function renderSummary() {
+  const s = calcSummary();
+
+  const navEl = document.getElementById('s-nav');
+  navEl.textContent = s.nav ? `$${fmtNum(s.nav)}` : '—';
+
+  const urEl = document.getElementById('s-unrealized');
+  const urAmt = s.unrealizedTWD;
+  urEl.textContent = isNaN(urAmt) ? '—' : (urAmt >= 0 ? '+' : '') + '$' + fmtNum(urAmt);
+  urEl.className = `s-value ${pnlClass(urAmt)}`;
+
+  const urPct = s.costTWD > 0 ? (urAmt / s.costTWD * 100) : null;
+  document.getElementById('s-unrealized-pct').textContent = urPct !== null ? `${urPct >= 0 ? '+' : ''}${urPct.toFixed(2)}%` : '—';
+
+  const rEl = document.getElementById('s-realized');
+  rEl.textContent = (s.realizedTWD >= 0 ? '+' : '') + '$' + fmtNum(s.realizedTWD);
+  rEl.className = `s-value ${pnlClass(s.realizedTWD)}`;
+
+  document.getElementById('s-capital').textContent = `$${fmtNum(state.capital)}`;
+  document.getElementById('s-mktval').textContent = s.mktValTWD ? `$${fmtNum(s.mktValTWD)}` : '—';
+}
+
+function renderHoldings() {
+  const el = document.getElementById('holdingsList');
+  if (state.holdings.length === 0) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">📈</div><div class="empty-text">尚無持倉<br>點右上角「+ 新增」加入股票</div></div>`;
+    return;
+  }
+  el.innerHTML = state.holdings.map(h => {
+    const price = state.prices[h.symbol];
+    const pnl = price ? (price - h.cost) * h.shares : null;
+    const pnlTWD = pnl !== null ? toTWD(pnl, h.market) : null;
+    const pct = price ? ((price - h.cost) / h.cost * 100) : null;
+    const costTotal = h.cost * h.shares;
+    const cls = pnl !== null ? (pnl >= 0 ? 'gain-card' : 'loss-card') : '';
+    const currency = h.market === 'US' ? 'USD' : 'TWD';
+    const priceTag = price
+      ? `<span class="price-tag">${currency} ${price.toFixed(2)}</span>`
+      : `<span class="price-loading">股價未取得</span>`;
+
+    return `<div class="holding-card ${cls}" data-id="${h.id}">
+      <div style="display:flex;align-items:center;grid-column:1">
+        <span class="hc-name">${h.name || h.symbol}</span>
+        <span style="font-size:11px;color:var(--text2);margin-left:6px">${h.symbol}</span>
+        ${priceTag}
+      </div>
+      <span class="hc-market">${h.market === 'US' ? '🇺🇸' : '🇹🇼'} ${h.market}</span>
+      <div class="hc-detail" style="grid-column:1">${fmtNum(h.shares, 4)} 股 × ${currency} ${h.cost} = ${currency} ${fmtNum(costTotal, 0)}</div>
+      <div style="grid-column:2;grid-row:1/4;display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
+        <div class="hc-pnl ${pnlClass(pnl)}">${pnlTWD !== null ? (pnlTWD >= 0 ? '+' : '') + '$' + fmtNum(pnlTWD) : '—'}</div>
+        <div class="hc-pct ${pnlClass(pct)}" style="color:${pct === null ? 'var(--text2)' : pct >= 0 ? 'var(--gain)' : 'var(--loss)'}">${pct !== null ? (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : ''}</div>
+        <div style="font-size:10px;color:var(--text2);margin-top:2px">TWD</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.querySelectorAll('.holding-card').forEach(card => {
+    card.addEventListener('click', () => openEditHolding(card.dataset.id));
+  });
+}
+
+function renderRealized() {
+  const el = document.getElementById('realizedList');
+  if (state.realized.length === 0) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-text">尚無已實現損益記錄</div></div>`;
+    return;
+  }
+  el.innerHTML = state.realized.map(r => {
+    const pnl = (r.sell - r.cost) * r.shares;
+    const pnlTWD = toTWD(pnl, r.market);
+    const pct = (r.sell - r.cost) / r.cost * 100;
+    const currency = r.market === 'US' ? 'USD' : 'TWD';
+    return `<div class="realized-card" style="cursor:pointer" data-id="${r.id}">
+      <div class="rc-left">
+        <div class="rc-name">${r.name || r.symbol} <span style="font-size:11px;color:var(--text2)">${r.symbol}</span></div>
+        <div class="rc-detail">${fmtNum(r.shares, 4)} 股 | 買 ${currency} ${r.cost} → 賣 ${currency} ${r.sell}</div>
+        ${r.date ? `<div class="rc-detail">${r.date}</div>` : ''}
+      </div>
+      <div class="rc-right">
+        <div class="rc-pnl ${pnlClass(pnl)}">${pnlTWD >= 0 ? '+' : ''}$${fmtNum(pnlTWD)}</div>
+        <div style="font-size:11px;color:${pct>=0?'var(--gain)':'var(--loss)'};">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.querySelectorAll('.realized-card').forEach(card => {
+    card.addEventListener('click', () => openEditRealized(card.dataset.id));
+  });
+}
+
+function renderSettings() {
+  document.getElementById('capitalDisplay').textContent = state.capital ? `$${fmtNum(state.capital)}` : '未設定';
+  document.getElementById('fxDisplay').textContent = state.fx ? `${state.fx}` : '未設定';
+}
+
+// ─── NAV ─────────────────────────────────────────────
+document.querySelectorAll('.nav-item').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('page-' + btn.dataset.page).classList.add('active');
+  });
+});
+
+// ─── MODALS ──────────────────────────────────────────
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+
+// Close modal on backdrop click
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) overlay.classList.remove('show');
+  });
+});
+
+// Holding Modal
+document.getElementById('addHoldingBtn').addEventListener('click', () => {
+  editingHoldingId = null;
+  document.getElementById('holdingModalTitle').textContent = '新增持倉';
+  document.getElementById('h-symbol').value = '';
+  document.getElementById('h-name').value = '';
+  document.getElementById('h-market').value = 'US';
+  document.getElementById('h-shares').value = '';
+  document.getElementById('h-cost').value = '';
+  document.getElementById('holdingDelete').style.display = 'none';
+  openModal('holdingModal');
+});
+document.getElementById('holdingCancel').addEventListener('click', () => closeModal('holdingModal'));
+document.getElementById('holdingSave').addEventListener('click', saveHolding);
+document.getElementById('holdingDelete').addEventListener('click', deleteHolding);
+
+function openEditHolding(id) {
+  const h = state.holdings.find(x => x.id === id);
+  if (!h) return;
+  editingHoldingId = id;
+  document.getElementById('holdingModalTitle').textContent = '編輯持倉';
+  document.getElementById('h-symbol').value = h.symbol;
+  document.getElementById('h-name').value = h.name || '';
+  document.getElementById('h-market').value = h.market;
+  document.getElementById('h-shares').value = h.shares;
+  document.getElementById('h-cost').value = h.cost;
+  document.getElementById('holdingDelete').style.display = 'block';
+  openModal('holdingModal');
+}
+function saveHolding() {
+  const symbol = document.getElementById('h-symbol').value.trim().toUpperCase();
+  const name = document.getElementById('h-name').value.trim();
+  const market = document.getElementById('h-market').value;
+  const shares = parseFloat(document.getElementById('h-shares').value);
+  const cost = parseFloat(document.getElementById('h-cost').value);
+  if (!symbol || isNaN(shares) || isNaN(cost) || shares <= 0 || cost <= 0) {
+    showToast('請填寫完整資料'); return;
+  }
+  if (editingHoldingId) {
+    const idx = state.holdings.findIndex(x => x.id === editingHoldingId);
+    state.holdings[idx] = { ...state.holdings[idx], symbol, name, market, shares, cost };
+  } else {
+    state.holdings.push({ id: uid(), symbol, name, market, shares, cost });
+  }
+  save(); render(); closeModal('holdingModal');
+  showToast(editingHoldingId ? '已更新持倉' : '已新增持倉');
+}
+function deleteHolding() {
+  if (!confirm('確定刪除這筆持倉？')) return;
+  state.holdings = state.holdings.filter(x => x.id !== editingHoldingId);
+  save(); render(); closeModal('holdingModal');
+  showToast('已刪除持倉');
+}
+
+// Realized Modal
+document.getElementById('addRealizedBtn').addEventListener('click', () => {
+  editingRealizedId = null;
+  document.getElementById('realizedModalTitle').textContent = '新增已實現損益';
+  ['r-symbol','r-name','r-shares','r-cost','r-sell'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('r-market').value = 'US';
+  document.getElementById('r-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('realizedDelete').style.display = 'none';
+  openModal('realizedModal');
+});
+document.getElementById('realizedCancel').addEventListener('click', () => closeModal('realizedModal'));
+document.getElementById('realizedSave').addEventListener('click', saveRealized);
+document.getElementById('realizedDelete').addEventListener('click', deleteRealized);
+
+function openEditRealized(id) {
+  const r = state.realized.find(x => x.id === id);
+  if (!r) return;
+  editingRealizedId = id;
+  document.getElementById('realizedModalTitle').textContent = '編輯已實現損益';
+  document.getElementById('r-symbol').value = r.symbol;
+  document.getElementById('r-name').value = r.name || '';
+  document.getElementById('r-market').value = r.market;
+  document.getElementById('r-shares').value = r.shares;
+  document.getElementById('r-cost').value = r.cost;
+  document.getElementById('r-sell').value = r.sell;
+  document.getElementById('r-date').value = r.date || '';
+  document.getElementById('realizedDelete').style.display = 'block';
+  openModal('realizedModal');
+}
+function saveRealized() {
+  const symbol = document.getElementById('r-symbol').value.trim().toUpperCase();
+  const name = document.getElementById('r-name').value.trim();
+  const market = document.getElementById('r-market').value;
+  const shares = parseFloat(document.getElementById('r-shares').value);
+  const cost = parseFloat(document.getElementById('r-cost').value);
+  const sell = parseFloat(document.getElementById('r-sell').value);
+  const date = document.getElementById('r-date').value;
+  if (!symbol || isNaN(shares) || isNaN(cost) || isNaN(sell)) {
+    showToast('請填寫完整資料'); return;
+  }
+  if (editingRealizedId) {
+    const idx = state.realized.findIndex(x => x.id === editingRealizedId);
+    state.realized[idx] = { ...state.realized[idx], symbol, name, market, shares, cost, sell, date };
+  } else {
+    state.realized.push({ id: uid(), symbol, name, market, shares, cost, sell, date });
+  }
+  save(); render(); closeModal('realizedModal');
+  showToast(editingRealizedId ? '已更新記錄' : '已新增記錄');
+}
+function deleteRealized() {
+  if (!confirm('確定刪除？')) return;
+  state.realized = state.realized.filter(x => x.id !== editingRealizedId);
+  save(); render(); closeModal('realizedModal');
+  showToast('已刪除記錄');
+}
+
+// Capital Modal
+document.getElementById('editCapitalBtn').addEventListener('click', () => {
+  document.getElementById('capitalInput').value = state.capital || '';
+  openModal('capitalModal');
+});
+document.getElementById('capitalCancel').addEventListener('click', () => closeModal('capitalModal'));
+document.getElementById('capitalSave').addEventListener('click', () => {
+  const v = parseFloat(document.getElementById('capitalInput').value);
+  if (isNaN(v) || v < 0) { showToast('請輸入正確金額'); return; }
+  state.capital = v; save(); render(); closeModal('capitalModal');
+  showToast('本金已更新');
+});
+
+// FX Modal
+document.getElementById('editFxBtn').addEventListener('click', () => {
+  document.getElementById('fxInput').value = state.fx || '';
+  openModal('fxModal');
+});
+document.getElementById('fxCancel').addEventListener('click', () => closeModal('fxModal'));
+document.getElementById('fxSave').addEventListener('click', () => {
+  const v = parseFloat(document.getElementById('fxInput').value);
+  if (isNaN(v) || v < 1) { showToast('請輸入正確匯率'); return; }
+  state.fx = v; save(); render(); closeModal('fxModal');
+  showToast('匯率已更新');
+});
+
+// Export
+document.getElementById('exportBtn').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `stock-pwa-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  showToast('資料已匯出');
+});
+
+// Clear data
+document.getElementById('clearDataBtn').addEventListener('click', () => {
+  if (!confirm('確定清除所有資料？此動作無法復原。')) return;
+  localStorage.removeItem('stockpwa_v1');
+  state = { capital: 0, fx: 32.5, holdings: [], realized: [], prices: {}, lastUpdate: null };
+  render();
+  showToast('資料已清除');
+});
+
+// Refresh
+document.getElementById('refreshBtn').addEventListener('click', refreshPrices);
+
+// ─── TOAST ───────────────────────────────────────────
+let toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ─── AUTO REFRESH at 09:00 TWD ───────────────────────
+function scheduleAutoRefresh() {
+  const now = new Date();
+  const twd = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
+  const next9am = new Date(twd);
+  next9am.setHours(9, 0, 0, 0);
+  if (twd >= next9am) next9am.setDate(next9am.getDate() + 1);
+  const ms = next9am - twd;
+  console.log(`[AutoRefresh] 下次自動更新：${next9am.toLocaleString('zh-TW')} (${Math.round(ms/60000)} 分鐘後)`);
+  setTimeout(() => {
+    refreshPrices();
+    scheduleAutoRefresh(); // reschedule for next day
+  }, ms);
+}
+
+// ─── INIT ────────────────────────────────────────────
+load();
+render();
+scheduleAutoRefresh();
+</script>
+
+<!-- SERVICE WORKER REGISTRATION -->
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(() => {
+    console.log('[SW] 已註冊');
+  });
+}
+</script>
+</body>
+</html>
