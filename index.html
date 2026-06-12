@@ -482,20 +482,32 @@ function calcSummary() {
     realizedTWD += r.pnlTWD !== undefined ? r.pnlTWD : toTWD((r.sell - r.cost) * r.shares, r.market);
   }
 
-  const nav = state.capital + holdingCostTWD + realizedTWD;
+  // 淨值 = 閒置現金（已含歷次賣出回收的錢）+ 持倉成本
+  const nav = state.capital + holdingCostTWD;
   return { nav, holdingCostTWD, unrealizedTWD, realizedTWD, totalCostForPct };
 }
 
 // ── PRICE FETCH ─────────────────────────────────────────────────────
-async function fetchPrice(symbol) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
-  const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-  const res = await fetch(proxy);
-  if (!res.ok) throw new Error('fetch failed');
+// 多個代理同時競速，誰最快回來就用誰
+const PROXIES = [
+  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  url => `https://proxy.cors.sh/${url}`,
+];
+
+async function fetchViaProxy(proxyFn, yahooUrl) {
+  const res = await fetch(proxyFn(yahooUrl), { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error('http error');
   const data = await res.json();
   const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
-  if (!price) throw new Error('no price');
+  if (!price || price <= 0) throw new Error('no price');
   return price;
+}
+
+async function fetchPrice(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+  // 所有代理同時發出，第一個成功的就回傳
+  return Promise.any(PROXIES.map(fn => fetchViaProxy(fn, url)));
 }
 
 async function refreshPrices() {
@@ -504,11 +516,18 @@ async function refreshPrices() {
   showToast('正在更新股價...');
   const symbols = [...new Set(state.holdings.map(h => h.symbol))];
   if (!symbols.length) { btn.classList.remove('loading'); showToast('尚無持倉'); return; }
+
+  // 所有股票同時並發抓取，不再一支一支等
+  const results = await Promise.allSettled(
+    symbols.map(sym => fetchPrice(sym).then(price => ({ sym, price })))
+  );
+
   let updated = 0, failed = [];
-  for (const sym of symbols) {
-    try { state.prices[sym] = await fetchPrice(sym); updated++; }
-    catch(e) { failed.push(sym); }
-  }
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') { state.prices[r.value.sym] = r.value.price; updated++; }
+    else { failed.push(symbols[i]); }
+  });
+
   state.lastUpdate = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
   save(); render(); btn.classList.remove('loading');
   showToast(failed.length ? `更新完成，${failed.join('/')} 失敗` : `✓ 已更新 ${updated} 支股票`);
@@ -730,6 +749,12 @@ document.getElementById('tradeConfirmBtn').addEventListener('click', () => {
 });
 
 function executeBuy(symbol, name, market, shares, price) {
+  // 扣減閒置現金（換算成TWD）
+  const costTWD = toTWD(shares * price, market);
+  if (state.capital > 0) {
+    state.capital = Math.max(0, state.capital - costTWD);
+  }
+
   const existing = state.holdings.find(h => h.symbol === symbol);
   if (existing) {
     const newShares = existing.shares + shares;
@@ -742,7 +767,7 @@ function executeBuy(symbol, name, market, shares, price) {
   }
   const cur = currencyLabel(market);
   save(); render();
-  showToast(`✓ 買入 ${symbol} ${shares}股 @ ${cur} ${price}`);
+  showToast(`✓ 買入 ${symbol} ${shares}股 @ ${cur} ${price}，扣款 TWD ${fmtNum(costTWD)}`);
   resetTradeForm();
 }
 
@@ -771,10 +796,14 @@ function executeSell(symbol, name, market, shares, price) {
     // avgCost 不變（加權平均，賣出不影響剩餘成本）
   }
 
+  // 賣出回收現金（換算成TWD）加回閒置現金
+  const receiveTWD = toTWD(shares * price, market);
+  state.capital += receiveTWD;
+
   const cur = currencyLabel(market);
   save(); render();
   const pnlStr = (pnlTWD >= 0 ? '+' : '-') + 'TWD ' + fmtNum(Math.abs(pnlTWD));
-  showToast(`✓ 賣出 ${symbol} ${shares}股，損益 ${pnlStr}`);
+  showToast(`✓ 賣出 ${symbol} ${shares}股，損益 ${pnlStr}，回收 TWD ${fmtNum(receiveTWD)}`);
   resetTradeForm();
 }
 
