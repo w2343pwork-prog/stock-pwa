@@ -160,6 +160,10 @@
         <div class="s-label">持倉成本</div>
         <div class="s-value neutral" id="s-cost">—</div>
       </div>
+      <div class="summary-card">
+        <div class="s-label">本金</div>
+        <div class="s-value neutral" id="s-principal">—</div>
+      </div>
     </div>
     <div class="section-header">
       <div class="section-title">持倉</div>
@@ -228,6 +232,14 @@
     <div class="settings-section">
       <div class="settings-title">帳戶設定</div>
       <div class="settings-card">
+        <div class="settings-row">
+          <div class="settings-row-label">本金 (TWD)</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="settings-row-value" id="principalDisplay">—</div>
+            <button class="settings-row-btn" id="addFundsBtn">＋ 新增資金</button>
+            <button class="settings-row-btn" id="editPrincipalBtn">編輯</button>
+          </div>
+        </div>
         <div class="settings-row">
           <div class="settings-row-label">閒置現金 (TWD)</div>
           <div style="display:flex;align-items:center;gap:10px">
@@ -373,6 +385,39 @@
   </div>
 </div>
 
+<!-- MODAL: 本金 -->
+<div class="modal-overlay" id="principalModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">設定本金</div>
+    <div class="form-group">
+      <label class="form-label">你一開始投入的總資金 (TWD)，設定後不會自動變動</label>
+      <input type="number" id="principalInput" placeholder="200000" min="0" step="any"/>
+    </div>
+    <div class="form-actions">
+      <button class="btn-cancel" id="principalCancel">取消</button>
+      <button class="btn-save" id="principalSave">儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: 新增資金 -->
+<div class="modal-overlay" id="addFundsModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">新增資金</div>
+    <div class="form-group">
+      <label class="form-label">新增金額 (TWD)，將同時加入本金與閒置現金</label>
+      <input type="number" id="addFundsInput" placeholder="50000" min="1" step="any"/>
+    </div>
+    <div class="trade-preview show" style="margin-bottom:0;margin-top:0" id="addFundsPreview"></div>
+    <div class="form-actions">
+      <button class="btn-cancel" id="addFundsCancel">取消</button>
+      <button class="btn-save" id="addFundsSave">確認新增</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: 閒置現金 -->
 <div class="modal-overlay" id="capitalModal">
   <div class="modal">
@@ -408,6 +453,7 @@
 <script>
 // ── STATE ──────────────────────────────────────────────────────────
 let state = {
+  principal: 0, // 本金（固定不變）TWD
   capital: 0,   // 閒置現金 TWD
   fx: 32.5,     // USD→TWD
   // holdings: [{ id, symbol, name, market, shares, avgCost }]
@@ -430,6 +476,7 @@ function save() {
 function load() {
   try {
     const d = JSON.parse(localStorage.getItem('stockpwa_v2') || '{}');
+    if (d.principal !== undefined) state.principal = d.principal;
     if (d.capital !== undefined) state.capital = d.capital;
     if (d.fx)         state.fx = d.fx;
     if (d.holdings)   state.holdings = d.holdings;
@@ -463,8 +510,9 @@ function currencyLabel(market) { return market === 'US' ? 'USD' : 'TWD'; }
 
 // ── CALCULATIONS ────────────────────────────────────────────────────
 function calcSummary() {
-  let holdingCostTWD = 0;
-  let unrealizedTWD = 0;
+  let holdingCostTWD = 0;   // 持倉成本（加權均價 × 股數）
+  let holdingMktTWD  = 0;   // 持倉市值（當前股價 × 股數）
+  let unrealizedTWD  = 0;   // 未實現損益
   let totalCostForPct = 0;
 
   for (const h of state.holdings) {
@@ -472,19 +520,20 @@ function calcSummary() {
     holdingCostTWD += toTWD(cost, h.market);
     const price = state.prices[h.symbol];
     if (price) {
-      unrealizedTWD += toTWD((price - h.avgCost) * h.shares, h.market);
+      const mkt = price * h.shares;
+      holdingMktTWD  += toTWD(mkt, h.market);
+      unrealizedTWD  += toTWD(mkt - cost, h.market);
       totalCostForPct += toTWD(cost, h.market);
     }
   }
 
-  let realizedTWD = 0;
-  for (const r of state.realized) {
-    realizedTWD += r.pnlTWD !== undefined ? r.pnlTWD : toTWD((r.sell - r.cost) * r.shares, r.market);
-  }
+  // 資產淨值 = 持倉成本 + 閒置現金
+  const nav = holdingCostTWD + state.capital;
 
-  // 淨值 = 閒置現金（已含歷次賣出回收的錢）+ 持倉成本
-  const nav = state.capital + holdingCostTWD;
-  return { nav, holdingCostTWD, unrealizedTWD, realizedTWD, totalCostForPct };
+  // 已實現損益 = 資產淨值 - 本金
+  const realizedTWD = nav - state.principal;
+
+  return { nav, holdingCostTWD, holdingMktTWD, unrealizedTWD, realizedTWD, totalCostForPct };
 }
 
 // ── PRICE FETCH ─────────────────────────────────────────────────────
@@ -559,6 +608,7 @@ function renderSummary() {
   rEl.className = `s-value ${pnlClass(s.realizedTWD)}`;
   document.getElementById('s-capital').textContent = `$${fmtNum(state.capital)}`;
   document.getElementById('s-cost').textContent = `$${fmtNum(s.holdingCostTWD)}`;
+  document.getElementById('s-principal').textContent = `$${fmtNum(state.principal)}`;
 }
 
 function renderHoldings() {
@@ -629,6 +679,7 @@ function renderRealized() {
 }
 
 function renderSettings() {
+  document.getElementById('principalDisplay').textContent = `$${fmtNum(state.principal)}`;
   document.getElementById('capitalDisplay').textContent = `$${fmtNum(state.capital)}`;
   document.getElementById('fxDisplay').textContent = state.fx;
 }
@@ -937,6 +988,43 @@ function deleteRealized() {
 }
 
 // ── SETTINGS ────────────────────────────────────────────────────────
+document.getElementById('addFundsBtn').addEventListener('click', () => {
+  document.getElementById('addFundsInput').value = '';
+  document.getElementById('addFundsPreview').textContent = '';
+  openModal('addFundsModal');
+});
+document.getElementById('addFundsInput').addEventListener('input', function() {
+  const v = parseFloat(this.value);
+  const preview = document.getElementById('addFundsPreview');
+  if (!isNaN(v) && v > 0) {
+    preview.innerHTML = `本金：<strong>$${fmtNum(state.principal)}</strong> → <strong>$${fmtNum(state.principal + v)}</strong><br>閒置現金：<strong>$${fmtNum(state.capital)}</strong> → <strong>$${fmtNum(state.capital + v)}</strong>`;
+    preview.classList.add('show');
+  } else {
+    preview.classList.remove('show');
+  }
+});
+document.getElementById('addFundsCancel').addEventListener('click', () => closeModal('addFundsModal'));
+document.getElementById('addFundsSave').addEventListener('click', () => {
+  const v = parseFloat(document.getElementById('addFundsInput').value);
+  if (isNaN(v) || v <= 0) { showToast('請輸入正確金額'); return; }
+  state.principal += v;
+  state.capital += v;
+  save(); render(); closeModal('addFundsModal');
+  showToast(`✓ 已新增 $${fmtNum(v)}，本金與閒置現金同步更新`);
+});
+
+document.getElementById('editPrincipalBtn').addEventListener('click', () => {
+  document.getElementById('principalInput').value = state.principal || '';
+  openModal('principalModal');
+});
+document.getElementById('principalCancel').addEventListener('click', () => closeModal('principalModal'));
+document.getElementById('principalSave').addEventListener('click', () => {
+  const v = parseFloat(document.getElementById('principalInput').value);
+  if (isNaN(v) || v < 0) { showToast('請輸入正確金額'); return; }
+  state.principal = v; save(); render(); closeModal('principalModal');
+  showToast('本金已設定');
+});
+
 document.getElementById('editCapitalBtn').addEventListener('click', () => {
   document.getElementById('capitalInput').value = state.capital || '';
   openModal('capitalModal');
@@ -970,7 +1058,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 document.getElementById('clearDataBtn').addEventListener('click', () => {
   if (!confirm('確定清除所有資料？此動作無法復原。')) return;
   localStorage.removeItem('stockpwa_v2');
-  state = { capital: 0, fx: 32.5, holdings: [], realized: [], prices: {}, lastUpdate: null };
+  state = { principal: 0, capital: 0, fx: 32.5, holdings: [], realized: [], prices: {}, lastUpdate: null };
   render(); showToast('資料已清除');
 });
 
