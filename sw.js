@@ -1,4 +1,4 @@
-const CACHE = 'stockpwa-v1';
+const CACHE = 'stockpwa-v3';
 const ASSETS = ['./index.html', './manifest.json'];
 
 self.addEventListener('install', e => {
@@ -14,17 +14,16 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // For API calls (Yahoo Finance), always go network
-  if (e.request.url.includes('finance.yahoo') || e.request.url.includes('allorigins')) {
+  if (e.request.url.includes('finance.yahoo') || e.request.url.includes('allorigins') || e.request.url.includes('corsproxy') || e.request.url.includes('cors.sh')) {
     e.respondWith(fetch(e.request).catch(() => new Response('{"error":"offline"}', { headers: {'Content-Type':'application/json'} })));
     return;
   }
-  // For app shell, cache-first
+  // 永遠優先從網路取得最新版本，失敗才用快取
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
+    fetch(e.request).then(res => {
       const clone = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, clone));
       return res;
-    }))
+    }).catch(() => caches.match(e.request))
   );
 });
