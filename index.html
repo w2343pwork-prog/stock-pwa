@@ -291,6 +291,18 @@
       </div>
     </div>
     <div class="settings-section">
+      <div class="settings-title">顯示設定</div>
+      <div class="settings-card">
+        <div class="settings-row">
+          <div class="settings-row-label">漲跌顏色</div>
+          <div style="display:flex;gap:6px">
+            <button class="sort-btn" id="colorGreenUp">漲綠跌紅</button>
+            <button class="sort-btn" id="colorRedUp">漲紅跌綠</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="settings-section">
       <div class="settings-title">關於</div>
       <div class="settings-card">
         <div class="settings-row">
@@ -935,6 +947,8 @@ function renderSettings() {
   document.getElementById('principalDisplay').textContent = `$${fmtNum(state.principal)}`;
   document.getElementById('capitalDisplay').textContent = `$${fmtNum(state.capital)}`;
   document.getElementById('fxDisplay').textContent = state.fx;
+  document.getElementById('colorGreenUp').classList.toggle('active', state.colorMode !== 'red-up');
+  document.getElementById('colorRedUp').classList.toggle('active', state.colorMode === 'red-up');
 }
 
 // ── TRADE PAGE ──────────────────────────────────────────────────────
@@ -1396,6 +1410,16 @@ function showToast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
 }
+
+// ── COLOR MODE ──────────────────────────────────────────────────────
+document.getElementById('colorGreenUp').addEventListener('click', () => {
+  state.colorMode = 'green-up'; save(); render();
+  showToast('已切換：漲綠跌紅');
+});
+document.getElementById('colorRedUp').addEventListener('click', () => {
+  state.colorMode = 'red-up'; save(); render();
+  showToast('已切換：漲紅跌綠');
+});
 
 // ── SORT BUTTONS ────────────────────────────────────────────────────
 document.querySelectorAll('#sortBar .sort-btn').forEach(btn => {
