@@ -125,6 +125,8 @@
     .trade-type-btn{flex:1;padding:12px;font-size:15px;font-weight:700;border:none;cursor:pointer;background:var(--surface2);color:var(--text2);transition:all .15s}
     .trade-type-btn.buy.active{background:var(--gain);color:#fff}
     .trade-type-btn.sell.active{background:var(--loss);color:#fff}
+  .sort-btn{padding:5px 12px;border-radius:20px;font-size:12px;font-weight:500;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;transition:all .15s;white-space:nowrap}
+  .sort-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
   </style>
 </head>
 <body>
@@ -168,6 +170,15 @@
     <div class="section-header">
       <div class="section-title">持倉</div>
       <button class="add-btn" id="addHoldingBtn">＋ 手動新增</button>
+    </div>
+    <div style="padding:0 20px 8px;display:flex;gap:6px;flex-wrap:wrap" id="sortBar">
+      <button class="sort-btn active" data-sort="default">預設</button>
+      <button class="sort-btn" data-sort="weight-desc">佔比 ↓</button>
+      <button class="sort-btn" data-sort="weight-asc">佔比 ↑</button>
+      <button class="sort-btn" data-sort="pct-desc">收益% ↓</button>
+      <button class="sort-btn" data-sort="pct-asc">收益% ↑</button>
+      <button class="sort-btn" data-sort="pnl-desc">收益額 ↓</button>
+      <button class="sort-btn" data-sort="pnl-asc">收益額 ↑</button>
     </div>
     <div class="holdings-list" id="holdingsList"></div>
   </div>
@@ -225,6 +236,29 @@
       <button class="add-btn" id="addRealizedBtn">＋ 手動新增</button>
     </div>
     <div class="holdings-list" id="realizedList"></div>
+  </div>
+
+  <!-- 圖表頁 -->
+  <div class="page" id="page-chart">
+    <div class="section-header" style="padding-bottom:4px">
+      <div class="section-title">歷史走勢</div>
+    </div>
+    <div style="padding:0 20px 8px;display:flex;gap:6px">
+      <button class="sort-btn active" data-chart="nav" id="chartNavBtn">資產淨值</button>
+      <button class="sort-btn" data-chart="realized" id="chartRealizedBtn">已實現損益</button>
+    </div>
+    <div style="padding:0 20px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px;overflow:hidden">
+        <canvas id="chartCanvas" style="width:100%;display:block"></canvas>
+        <div id="chartEmpty" class="empty-state" style="display:none;padding:32px 0">
+          <div class="empty-icon">📈</div>
+          <div class="empty-text">每月自動記錄一次<br>資料累積後會顯示在這裡</div>
+        </div>
+      </div>
+    </div>
+    <div style="padding:14px 20px 0">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden" id="chartHistoryList"></div>
+    </div>
   </div>
 
   <!-- 設定頁 -->
@@ -294,6 +328,7 @@
   <button class="nav-item active" data-page="overview"><span class="nav-icon">📊</span><span>總覽</span></button>
   <button class="nav-item" data-page="trade"><span class="nav-icon">💱</span><span>買賣</span></button>
   <button class="nav-item" data-page="realized"><span class="nav-icon">✅</span><span>已實現</span></button>
+  <button class="nav-item" data-page="chart"><span class="nav-icon">📈</span><span>圖表</span></button>
   <button class="nav-item" data-page="settings"><span class="nav-icon">⚙️</span><span>設定</span></button>
 </nav>
 
@@ -456,6 +491,9 @@ let state = {
   principal: 0, // 本金（固定不變）TWD
   capital: 0,   // 閒置現金 TWD
   fx: 32.5,     // USD→TWD
+  sortMode: 'default',
+  chartMode: 'nav',
+  navHistory: [], // [{ month:'2025-06', nav, realized }]
   // holdings: [{ id, symbol, name, market, shares, avgCost }]
   // avgCost = 加權平均成本（原幣）
   holdings: [],
@@ -478,6 +516,9 @@ function load() {
     const d = JSON.parse(localStorage.getItem('stockpwa_v2') || '{}');
     if (d.principal !== undefined) state.principal = d.principal;
     if (d.capital !== undefined) state.capital = d.capital;
+    if (d.sortMode) state.sortMode = d.sortMode;
+    if (d.chartMode) state.chartMode = d.chartMode;
+    if (d.navHistory) state.navHistory = d.navHistory;
     if (d.fx)         state.fx = d.fx;
     if (d.holdings)   state.holdings = d.holdings;
     if (d.realized)   state.realized = d.realized;
@@ -596,6 +637,7 @@ async function refreshPrices() {
   });
 
   state.lastUpdate = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+  recordMonthlySnapshot(); // 每次更新股價後記錄本月快照
   save(); render(); btn.classList.remove('loading');
   showToast(failed.length ? `更新完成，${failed.join('/')} 失敗` : `✓ 已更新 ${updated} 支股票`);
 }
@@ -605,6 +647,7 @@ function render() {
   renderSummary();
   renderHoldings();
   renderRealized();
+  renderChart();
   renderSettings();
   updateTradeSymbolSelect();
   document.getElementById('updateTime').textContent = state.lastUpdate
@@ -635,7 +678,30 @@ function renderHoldings() {
     el.innerHTML = `<div class="empty-state"><div class="empty-icon">📈</div><div class="empty-text">尚無持倉<br>點「買賣」頁面買入股票<br>或點右上角「手動新增」</div></div>`;
     return;
   }
-  el.innerHTML = state.holdings.map(h => {
+  // 排序
+  const sorted = [...state.holdings].sort((a, b) => {
+    const pa = state.prices[a.symbol], pb = state.prices[b.symbol];
+    const s = calcSummary();
+    const mktA = pa ? toTWD(pa * a.shares, a.market) : 0;
+    const mktB = pb ? toTWD(pb * b.shares, b.market) : 0;
+    const wA = s.totalPortfolioTWD > 0 ? mktA / s.totalPortfolioTWD : 0;
+    const wB = s.totalPortfolioTWD > 0 ? mktB / s.totalPortfolioTWD : 0;
+    const pctA = pa ? (pa - a.avgCost) / a.avgCost : 0;
+    const pctB = pb ? (pb - b.avgCost) / b.avgCost : 0;
+    const pnlA = pa ? toTWD((pa - a.avgCost) * a.shares, a.market) : 0;
+    const pnlB = pb ? toTWD((pb - b.avgCost) * b.shares, b.market) : 0;
+    switch (state.sortMode) {
+      case 'weight-desc': return wB - wA;
+      case 'weight-asc':  return wA - wB;
+      case 'pct-desc':    return pctB - pctA;
+      case 'pct-asc':     return pctA - pctB;
+      case 'pnl-desc':    return pnlB - pnlA;
+      case 'pnl-asc':     return pnlA - pnlB;
+      default: return 0;
+    }
+  });
+
+  el.innerHTML = sorted.map(h => {
     const price = state.prices[h.symbol];
     const cur = currencyLabel(h.market);
     const costTotal = h.avgCost * h.shares;
@@ -710,6 +776,138 @@ function renderRealized() {
   el.querySelectorAll('.realized-card').forEach(card => {
     card.addEventListener('click', () => openEditRealized(card.dataset.id));
   });
+}
+
+// ── CHART ───────────────────────────────────────────────────────────
+function recordMonthlySnapshot() {
+  const now = new Date();
+  const month = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const s = calcSummary();
+  const existing = state.navHistory.findIndex(h => h.month === month);
+  const entry = { month, nav: s.nav, realized: s.realizedTWD };
+  if (existing >= 0) state.navHistory[existing] = entry;
+  else state.navHistory.push(entry);
+  state.navHistory.sort((a,b) => a.month.localeCompare(b.month));
+  save();
+}
+
+function renderChart() {
+  const data = state.navHistory;
+  const canvas = document.getElementById('chartCanvas');
+  const empty  = document.getElementById('chartEmpty');
+  const listEl = document.getElementById('chartHistoryList');
+
+  if (!data || data.length === 0) {
+    canvas.style.display = 'none';
+    empty.style.display = 'block';
+    listEl.innerHTML = '';
+    return;
+  }
+  canvas.style.display = 'block';
+  empty.style.display = 'none';
+
+  const key = state.chartMode === 'nav' ? 'nav' : 'realized';
+  const label = state.chartMode === 'nav' ? '資產淨值' : '已實現損益';
+  const values = data.map(d => d[key] || 0);
+  const minV = Math.min(...values);
+  const maxV = Math.max(...values);
+  const range = maxV - minV || 1;
+
+  const W = canvas.parentElement.clientWidth - 32;
+  const H = 180;
+  canvas.width = W * window.devicePixelRatio;
+  canvas.height = H * window.devicePixelRatio;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+  const pad = { top: 16, right: 12, bottom: 32, left: 52 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid lines
+  const gridCount = 4;
+  ctx.strokeStyle = 'rgba(31,45,69,0.8)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= gridCount; i++) {
+    const y = pad.top + (cH / gridCount) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    const val = maxV - (range / gridCount) * i;
+    ctx.fillStyle = '#64748b';
+    ctx.font = `${10 * window.devicePixelRatio / window.devicePixelRatio}px SF Mono, monospace`;
+    ctx.textAlign = 'right';
+    ctx.fillText('$' + fmtNum(val), pad.left - 4, y + 4);
+  }
+
+  if (data.length === 1) {
+    // 只有一筆：畫一個點
+    const x = pad.left + cW / 2;
+    const y = pad.top + cH / 2;
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#3b82f6';
+    ctx.fill();
+  } else {
+    const pts = data.map((d, i) => ({
+      x: pad.left + (i / (data.length - 1)) * cW,
+      y: pad.top + (1 - (( (d[key]||0) - minV) / range)) * cH
+    }));
+
+    // 漸層填充
+    const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
+    grad.addColorStop(0, 'rgba(59,130,246,0.3)');
+    grad.addColorStop(1, 'rgba(59,130,246,0)');
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pad.top + cH);
+    pts.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(pts[pts.length-1].x, pad.top + cH);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // 折線
+    ctx.beginPath();
+    ctx.strokeStyle = '#3b82f6';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.stroke();
+
+    // 點
+    pts.forEach(p => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#60a5fa';
+      ctx.fill();
+    });
+  }
+
+  // X 軸月份標籤
+  ctx.fillStyle = '#64748b';
+  ctx.textAlign = 'center';
+  const step = Math.ceil(data.length / 6);
+  data.forEach((d, i) => {
+    if (i % step !== 0 && i !== data.length - 1) return;
+    const x = data.length === 1 ? pad.left + cW / 2 : pad.left + (i / (data.length - 1)) * cW;
+    ctx.fillText(d.month.slice(5), x, H - 8);
+  });
+
+  // 歷史列表
+  listEl.innerHTML = [...data].reverse().map((d, i) => {
+    const prev = [...data].reverse()[i+1];
+    const val = d[key] || 0;
+    const diff = prev ? val - (prev[key] || 0) : null;
+    return `<div class="settings-row">
+      <div class="settings-row-label" style="font-family:var(--font-num)">${d.month}</div>
+      <div style="text-align:right">
+        <div style="font-family:var(--font-num);font-size:14px;color:var(--text)">$${fmtNum(val)}</div>
+        ${diff !== null ? `<div style="font-size:11px;color:${diff>=0?'var(--gain)':'var(--loss)'}">月變動 ${diff>=0?'+':'-'}$${fmtNum(Math.abs(diff))}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function renderSettings() {
@@ -1092,7 +1290,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 document.getElementById('clearDataBtn').addEventListener('click', () => {
   if (!confirm('確定清除所有資料？此動作無法復原。')) return;
   localStorage.removeItem('stockpwa_v2');
-  state = { principal: 0, capital: 0, fx: 32.5, holdings: [], realized: [], prices: {}, lastUpdate: null };
+  state = { principal: 0, capital: 0, fx: 32.5, holdings: [], realized: [], prices: {}, lastUpdate: null, sortMode: 'default', chartMode: 'nav', navHistory: [] };
   render(); showToast('資料已清除');
 });
 
@@ -1103,6 +1301,7 @@ document.querySelectorAll('.nav-item').forEach(btn => {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('page-' + btn.dataset.page).classList.add('active');
+    if (btn.dataset.page === 'chart') renderChart();
   });
 });
 
@@ -1121,6 +1320,31 @@ function showToast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2500);
 }
+
+// ── SORT BUTTONS ────────────────────────────────────────────────────
+document.querySelectorAll('#sortBar .sort-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#sortBar .sort-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.sortMode = btn.dataset.sort;
+    save();
+    renderHoldings();
+  });
+});
+
+// ── CHART BUTTONS ────────────────────────────────────────────────────
+document.getElementById('chartNavBtn').addEventListener('click', () => {
+  state.chartMode = 'nav';
+  document.getElementById('chartNavBtn').classList.add('active');
+  document.getElementById('chartRealizedBtn').classList.remove('active');
+  save(); renderChart();
+});
+document.getElementById('chartRealizedBtn').addEventListener('click', () => {
+  state.chartMode = 'realized';
+  document.getElementById('chartRealizedBtn').classList.add('active');
+  document.getElementById('chartNavBtn').classList.remove('active');
+  save(); renderChart();
+});
 
 // ── REFRESH BTN & AUTO ───────────────────────────────────────────────
 document.getElementById('refreshBtn').addEventListener('click', refreshPrices);
