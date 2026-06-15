@@ -314,6 +314,10 @@
           <div class="settings-row-label">匯出資料 (JSON)</div>
           <div class="settings-row-value">→</div>
         </div>
+        <div class="settings-row" style="cursor:pointer" id="importBtn">
+          <div class="settings-row-label">匯入資料 (JSON)</div>
+          <div class="settings-row-value">→</div>
+        </div>
         <div class="settings-row" style="cursor:pointer" id="clearDataBtn">
           <div class="settings-row-label" style="color:var(--loss)">清除所有資料</div>
           <div class="settings-row-value">→</div>
@@ -333,6 +337,23 @@
 </nav>
 
 <div class="toast" id="toast"></div>
+
+<!-- 隱藏 file input -->
+<input type="file" id="importFileInput" accept=".json" style="display:none"/>
+
+<!-- MODAL: 匯入確認 -->
+<div class="modal-overlay" id="importModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">匯入資料確認</div>
+    <div id="importPreview" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);padding:14px;margin-bottom:16px;font-size:13px;line-height:2;font-family:var(--font-num)"></div>
+    <div style="font-size:13px;color:var(--loss);margin-bottom:16px">⚠️ 匯入後將覆蓋目前所有資料，此動作無法復原</div>
+    <div class="form-actions">
+      <button class="btn-cancel" id="importCancel">取消</button>
+      <button class="btn-save" id="importConfirm">確認匯入</button>
+    </div>
+  </div>
+</div>
 
 <!-- MODAL: 手動新增/編輯持倉 -->
 <div class="modal-overlay" id="holdingModal">
@@ -1286,6 +1307,61 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = `stock-pwa-${new Date().toISOString().slice(0,10)}.json`; a.click();
   showToast('資料已匯出');
+});
+
+// 匯入
+let importData = null;
+document.getElementById('importBtn').addEventListener('click', () => {
+  document.getElementById('importFileInput').click();
+});
+document.getElementById('importFileInput').addEventListener('change', function() {
+  const file = this.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      // 驗證基本結構
+      if (typeof data !== 'object' || !Array.isArray(data.holdings)) {
+        showToast('❌ 檔案格式不正確'); return;
+      }
+      importData = data;
+      // 顯示預覽
+      document.getElementById('importPreview').innerHTML =
+        `本金：<strong>$${fmtNum(data.principal || 0)}</strong><br>` +
+        `閒置現金：<strong>$${fmtNum(data.capital || 0)}</strong><br>` +
+        `持倉股票：<strong>${data.holdings.length} 支</strong><br>` +
+        `已實現記錄：<strong>${(data.realized||[]).length} 筆</strong><br>` +
+        `歷史快照：<strong>${(data.navHistory||[]).length} 筆</strong>`;
+      openModal('importModal');
+    } catch(err) {
+      showToast('❌ 檔案讀取失敗，請確認是正確的 JSON 檔');
+    }
+    this.value = ''; // 清除 input 讓同一檔案可重複選
+  };
+  reader.readAsText(file);
+});
+document.getElementById('importCancel').addEventListener('click', () => {
+  importData = null;
+  closeModal('importModal');
+});
+document.getElementById('importConfirm').addEventListener('click', () => {
+  if (!importData) return;
+  // 合併匯入（保留所有欄位，缺少的用預設值補）
+  state.principal   = importData.principal   || 0;
+  state.capital     = importData.capital     || 0;
+  state.fx          = importData.fx          || 32.5;
+  state.holdings    = importData.holdings    || [];
+  state.realized    = importData.realized    || [];
+  state.prices      = importData.prices      || {};
+  state.lastUpdate  = importData.lastUpdate  || null;
+  state.navHistory  = importData.navHistory  || [];
+  state.sortMode    = importData.sortMode    || 'default';
+  state.chartMode   = importData.chartMode   || 'nav';
+  state.colorMode   = importData.colorMode   || 'green-up';
+  importData = null;
+  save(); render(); closeModal('importModal');
+  showToast('✓ 資料匯入成功！');
 });
 document.getElementById('clearDataBtn').addEventListener('click', () => {
   if (!confirm('確定清除所有資料？此動作無法復原。')) return;
