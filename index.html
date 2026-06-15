@@ -41,6 +41,8 @@
     .s-value{font-family:var(--font-num);font-size:22px;font-weight:700;letter-spacing:-0.5px}
     .s-value.big{font-size:28px}
     .s-value.gain{color:var(--gain)} .s-value.loss{color:var(--loss)} .s-value.neutral{color:var(--text)}
+    /* 漲紅跌綠模式：交換 gain/loss 顏色 */
+    html[data-color="red-up"] { --gain:#f87171; --loss:#34d399; }
     .s-sub{font-size:11px;color:var(--text2);margin-top:4px;font-family:var(--font-num)}
     .section-header{padding:14px 20px 8px;display:flex;align-items:center;justify-content:space-between}
     .section-title{font-size:13px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.8px}
@@ -762,7 +764,7 @@ function renderHoldings() {
         <div class="hc-detail">${fmtNum(h.shares, 4)} 股 × 均價 ${cur} ${h.avgCost.toFixed(2)} = ${cur} ${fmtNum(costTotal, 0)}</div>
         <div style="text-align:right">
           <div class="hc-pnl ${pnlClass(pnl)}">${pnlTWD !== null ? (pnlTWD >= 0 ? '+' : '-') + '$' + fmtNum(Math.abs(pnlTWD)) : '—'}</div>
-          <div class="hc-pct" style="color:${pct === null ? 'var(--text2)' : pct >= 0 ? 'var(--gain)' : 'var(--loss)'}">
+          <div class="hc-pct" style="color:${pct === null ? 'var(--text2)' : pnlColor(pct)}">
             ${pct !== null ? (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : ''}
           </div>
         </div>
@@ -802,7 +804,7 @@ function renderRealized() {
       </div>
       <div class="rc-right">
         <div class="rc-pnl ${pnlClass(pnlTWD)}">${pnlTWD >= 0 ? '+' : '-'}$${fmtNum(Math.abs(pnlTWD))}</div>
-        <div style="font-size:11px;color:${pct>=0?'var(--gain)':'var(--loss)'}">${pct>=0?'+':''}${pct.toFixed(2)}%</div>
+        <div style="font-size:11px;color:${pnlColor(pct)}">${pct>=0?'+':''}${pct.toFixed(2)}%</div>
       </div>
     </div>`;
   }).join('');
@@ -937,7 +939,7 @@ function renderChart() {
       <div class="settings-row-label" style="font-family:var(--font-num)">${d.month}</div>
       <div style="text-align:right">
         <div style="font-family:var(--font-num);font-size:14px;color:var(--text)">$${fmtNum(val)}</div>
-        ${diff !== null ? `<div style="font-size:11px;color:${diff>=0?'var(--gain)':'var(--loss)'}">月變動 ${diff>=0?'+':'-'}$${fmtNum(Math.abs(diff))}</div>` : ''}
+        ${diff !== null ? `<div style="font-size:11px;color:${pnlColor(diff)}">月變動 ${diff>=0?'+':'-'}$${fmtNum(Math.abs(diff))}</div>` : ''}
       </div>
     </div>`;
   }).join('');
@@ -1000,7 +1002,7 @@ function updateTradePreview() {
     const pct = (price - existing.avgCost) / existing.avgCost * 100;
     const remainShares = existing.shares - shares;
     preview.innerHTML = `賣出總額：<strong>${cur} ${fmtNum(totalAmt,2)} (TWD ${fmtNum(totalTWD,0)})</strong><br>
-      成本均價：${cur} ${existing.avgCost.toFixed(2)}，實現損益：<strong style="color:${pnlTWD>=0?'var(--gain)':'var(--loss)'}">${pnlTWD>=0?'+':'-'}TWD ${fmtNum(Math.abs(pnlTWD))} (${pct>=0?'+':''}${pct.toFixed(2)}%)</strong><br>
+      成本均價：${cur} ${existing.avgCost.toFixed(2)}，實現損益：<strong style="color:${pnlColor(pnlTWD)}">${pnlTWD>=0?'+':'-'}TWD ${fmtNum(Math.abs(pnlTWD))} (${pct>=0?'+':''}${pct.toFixed(2)}%)</strong><br>
       賣出後剩餘：<strong>${fmtNum(remainShares,4)} 股</strong>`;
     preview.classList.add('show');
   }
@@ -1412,12 +1414,15 @@ function showToast(msg) {
 }
 
 // ── COLOR MODE ──────────────────────────────────────────────────────
+function applyColorMode() {
+  document.documentElement.setAttribute('data-color', state.colorMode || 'green-up');
+}
 document.getElementById('colorGreenUp').addEventListener('click', () => {
-  state.colorMode = 'green-up'; save(); render();
+  state.colorMode = 'green-up'; save(); applyColorMode(); render();
   showToast('已切換：漲綠跌紅');
 });
 document.getElementById('colorRedUp').addEventListener('click', () => {
-  state.colorMode = 'red-up'; save(); render();
+  state.colorMode = 'red-up'; save(); applyColorMode(); render();
   showToast('已切換：漲紅跌綠');
 });
 
@@ -1457,7 +1462,7 @@ function scheduleAutoRefresh() {
 }
 
 // ── INIT ─────────────────────────────────────────────────────────────
-load(); render(); scheduleAutoRefresh();
+load(); applyColorMode(); render(); scheduleAutoRefresh();
 </script>
 <script>
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
