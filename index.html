@@ -533,7 +533,10 @@ function calcSummary() {
   // 已實現損益 = 資產淨值 - 本金
   const realizedTWD = nav - state.principal;
 
-  return { nav, holdingCostTWD, holdingMktTWD, unrealizedTWD, realizedTWD, totalCostForPct };
+  // 持倉市值＋現金（用來計算各股佔比）
+  const totalPortfolioTWD = holdingMktTWD + state.capital;
+
+  return { nav, holdingCostTWD, holdingMktTWD, unrealizedTWD, realizedTWD, totalCostForPct, totalPortfolioTWD };
 }
 
 // ── PRICE FETCH ─────────────────────────────────────────────────────
@@ -553,10 +556,25 @@ async function fetchViaProxy(proxyFn, yahooUrl) {
   return price;
 }
 
+// 台股代號自動判斷：純數字或數字+英文字母結尾 → 嘗試 .TW 和 .TWO
+function getTWSymbols(symbol) {
+  // 已經有後綴就直接用
+  if (symbol.includes('.')) return [symbol];
+  // 美股：有英文字母開頭且沒有數字結尾特徵 → 直接用原代號
+  if (/^[A-Z]+$/.test(symbol)) return [symbol];
+  // 台股：數字開頭，或數字+英文結尾（如 00981A）→ 同時試 .TW 和 .TWO
+  if (/^[0-9]/.test(symbol)) return [symbol + '.TW', symbol + '.TWO'];
+  return [symbol];
+}
+
 async function fetchPrice(symbol) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
-  // 所有代理同時發出，第一個成功的就回傳
-  return Promise.any(PROXIES.map(fn => fetchViaProxy(fn, url)));
+  const candidates = getTWSymbols(symbol);
+  // 所有候選代號同時嘗試所有代理，最快成功的就回傳
+  const attempts = candidates.flatMap(sym => {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
+    return PROXIES.map(fn => fetchViaProxy(fn, url));
+  });
+  return Promise.any(attempts);
 }
 
 async function refreshPrices() {
@@ -626,9 +644,15 @@ function renderHoldings() {
     const pct = price ? (price - h.avgCost) / h.avgCost * 100 : null;
     const cls = pnl !== null ? (pnl >= 0 ? 'gain-card' : 'loss-card') : '';
     const priceStr = price ? `<span class="price-tag">${cur} ${price.toFixed(2)}</span>` : '';
+    // 計算該股佔（總持倉市值＋現金）的比重
+    const s = calcSummary();
+    const mktValTWD = price ? toTWD(price * h.shares, h.market) : null;
+    const weightPct = (mktValTWD !== null && s.totalPortfolioTWD > 0)
+      ? (mktValTWD / s.totalPortfolioTWD * 100) : null;
+
     return `<div class="holding-card ${cls}" data-id="${h.id}">
       <div class="hc-row">
-        <div style="display:flex;align-items:center">
+        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
           <span class="hc-name">${h.name || h.symbol}</span>
           <span class="hc-symbol">${h.symbol}</span>
           ${priceStr}
@@ -642,6 +666,16 @@ function renderHoldings() {
           <div class="hc-pct" style="color:${pct === null ? 'var(--text2)' : pct >= 0 ? 'var(--gain)' : 'var(--loss)'}">
             ${pct !== null ? (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : ''}
           </div>
+        </div>
+      </div>
+      <div class="hc-row" style="margin-top:2px">
+        <div style="display:flex;align-items:center;gap:6px;flex:1">
+          <div style="flex:1;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden">
+            <div style="height:100%;width:${weightPct !== null ? weightPct.toFixed(1) : 0}%;background:var(--accent);border-radius:2px;transition:width .3s"></div>
+          </div>
+          <span style="font-size:11px;color:var(--text2);font-family:var(--font-num);white-space:nowrap">
+            佔比 ${weightPct !== null ? weightPct.toFixed(1) + '%' : '—'}
+          </span>
         </div>
       </div>
     </div>`;
