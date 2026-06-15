@@ -617,39 +617,51 @@ function calcSummary() {
 
 // ── PRICE FETCH ─────────────────────────────────────────────────────
 // 多個代理同時競速，誰最快回來就用誰
+// ── 代理清單（多源競速，誰快用誰）────────────────────────────────
 const PROXIES = [
   url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
   url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  url => `https://proxy.cors.sh/${url}`,
+  url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+  url => `https://thingproxy.freeboard.io/fetch/${url}`,
 ];
 
 async function fetchViaProxy(proxyFn, yahooUrl) {
-  const res = await fetch(proxyFn(yahooUrl), { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error('http error');
-  const data = await res.json();
-  const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
-  if (!price || price <= 0) throw new Error('no price');
-  return price;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(proxyFn(yahooUrl), { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) throw new Error('http ' + res.status);
+    const text = await res.text();
+    // 有些代理會回傳 HTML 錯誤頁，先確認是 JSON
+    if (!text.trim().startsWith('{')) throw new Error('not json');
+    const data = JSON.parse(text);
+    // 支援 v8 和 v7 兩種回傳格式
+    const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice
+      || data?.quoteSummary?.result?.[0]?.price?.regularMarketPrice?.raw;
+    if (!price || price <= 0) throw new Error('no price');
+    return price;
+  } catch(e) {
+    clearTimeout(timer);
+    throw e;
+  }
 }
 
-// 台股代號自動判斷：純數字或數字+英文字母結尾 → 嘗試 .TW 和 .TWO
+// 台股代號自動判斷
 function getTWSymbols(symbol) {
-  // 已經有後綴就直接用
   if (symbol.includes('.')) return [symbol];
-  // 美股：有英文字母開頭且沒有數字結尾特徵 → 直接用原代號
   if (/^[A-Z]+$/.test(symbol)) return [symbol];
-  // 台股：數字開頭，或數字+英文結尾（如 00981A）→ 同時試 .TW 和 .TWO
   if (/^[0-9]/.test(symbol)) return [symbol + '.TW', symbol + '.TWO'];
   return [symbol];
 }
 
 async function fetchPrice(symbol) {
   const candidates = getTWSymbols(symbol);
-  // 所有候選代號同時嘗試所有代理，最快成功的就回傳
   const attempts = candidates.flatMap(sym => {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
     return PROXIES.map(fn => fetchViaProxy(fn, url));
   });
+  // 第一個成功的就回傳，全部失敗才拋錯
   return Promise.any(attempts);
 }
 
@@ -1363,12 +1375,35 @@ document.getElementById('importCancel').addEventListener('click', () => {
 });
 document.getElementById('importConfirm').addEventListener('click', () => {
   if (!importData) return;
-  // 合併匯入（保留所有欄位，缺少的用預設值補）
+
+  // 舊版 holdings 用 cost 欄位，新版用 avgCost，自動轉換
+  const holdings = (importData.holdings || []).map(h => ({
+    id: h.id || uid(),
+    symbol: h.symbol || '',
+    name: h.name || '',
+    market: h.market || 'US',
+    shares: h.shares || 0,
+    avgCost: h.avgCost !== undefined ? h.avgCost : (h.cost || 0),
+  }));
+
+  // 舊版 realized 用 cost 欄位，自動轉換
+  const realized = (importData.realized || []).map(r => ({
+    id: r.id || uid(),
+    symbol: r.symbol || '',
+    name: r.name || '',
+    market: r.market || 'US',
+    shares: r.shares || 0,
+    cost: r.cost || r.avgCost || 0,
+    sell: r.sell || 0,
+    date: r.date || '',
+    pnlTWD: r.pnlTWD !== undefined ? r.pnlTWD : toTWD((r.sell - (r.cost || r.avgCost || 0)) * r.shares, r.market || 'US'),
+  }));
+
   state.principal   = importData.principal   || 0;
   state.capital     = importData.capital     || 0;
   state.fx          = importData.fx          || 32.5;
-  state.holdings    = importData.holdings    || [];
-  state.realized    = importData.realized    || [];
+  state.holdings    = holdings;
+  state.realized    = realized;
   state.prices      = importData.prices      || {};
   state.lastUpdate  = importData.lastUpdate  || null;
   state.navHistory  = importData.navHistory  || [];
@@ -1376,7 +1411,7 @@ document.getElementById('importConfirm').addEventListener('click', () => {
   state.chartMode   = importData.chartMode   || 'nav';
   state.colorMode   = importData.colorMode   || 'green-up';
   importData = null;
-  save(); render(); closeModal('importModal');
+  save(); applyColorMode(); render(); closeModal('importModal');
   showToast('✓ 資料匯入成功！');
 });
 document.getElementById('clearDataBtn').addEventListener('click', () => {
