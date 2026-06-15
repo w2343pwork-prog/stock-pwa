@@ -1,4 +1,4 @@
-const CACHE = 'stockpwa-v3';
+const CACHE = 'stockpwa-v4';
 const ASSETS = ['./index.html', './manifest.json'];
 
 self.addEventListener('install', e => {
