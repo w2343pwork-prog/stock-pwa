@@ -30,12 +30,11 @@
 }
 html[data-color="red-up"]{--gain:#f87171;--loss:#34d399}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--ui);-webkit-font-smoothing:antialiased;overscroll-behavior:none;overscroll-behavior-y:none}
-.page{overscroll-behavior-y:contain}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--ui);-webkit-font-smoothing:antialiased;overscroll-behavior:none}
 button{font-family:var(--ui);cursor:pointer}
 
 /* ── LAYOUT ── */
-.app{max-width:430px;margin:0 auto;height:100dvh;display:flex;flex-direction:column;padding-top:calc(var(--safe-t)+20px);overflow:hidden}
+.app{max-width:430px;margin:0 auto;height:100dvh;display:flex;flex-direction:column;padding-top:calc(var(--safe-t)+20px)}
 
 /* ── HEADER ── */
 .hdr{padding:0 20px 12px;display:flex;align-items:center;justify-content:space-between}
@@ -113,8 +112,8 @@ button{font-family:var(--ui);cursor:pointer}
 .nav-icon{font-size:28px;line-height:1}
 
 /* ── PAGE ── */
-.page{display:none;flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:calc(var(--safe-b)+200px);scroll-padding-bottom:calc(var(--safe-b)+200px)}
-.page.on{display:block}
+.page{display:none;flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.page.on{display:flex;flex-direction:column}
 
 /* ── TRADE PAGE ── */
 .trade-inner{padding:0 20px 16px}
@@ -1395,6 +1394,17 @@ function scheduleAuto() {
 // ═══════════════════════════════════════════════════════
 loadState();
 applyColor();
+
+// 動態計算導覽列高度，設定為每個 page 的 padding-bottom
+function setPagePadding() {
+  const nav = document.querySelector('.nav');
+  const navH = nav ? nav.getBoundingClientRect().height : 80;
+  document.querySelectorAll('.page').forEach(p => {
+    p.style.paddingBottom = (navH + 16) + 'px';
+  });
+}
+window.addEventListener('resize', setPagePadding);
+setPagePadding();
 
 // 同步排序按鈕狀態
 document.querySelectorAll('#sortBar .pill').forEach(b => {
