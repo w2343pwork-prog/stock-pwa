@@ -267,14 +267,34 @@ select option{background:var(--s1)}
   <div class="page" id="page-chart">
     <div class="sec-hdr"><div class="sec-title">歷史走勢</div></div>
     <div class="sort-bar">
-      <button class="pill on" id="cNavBtn" data-c="nav">資產淨值</button>
-      <button class="pill" id="cRealBtn" data-c="realized">已實現損益</button>
+      <button class="pill on" id="cNavBtn">淨值＋已實現</button>
+      <button class="pill" id="cTotalBtn">總損益</button>
     </div>
-    <div class="chart-box">
-      <canvas id="chartCanvas" style="width:100%;display:block"></canvas>
-      <div class="empty" id="chartEmpty" style="display:none">
-        <div class="empty-icon">📈</div>
-        <div class="empty-txt">每次更新股價後自動記錄<br>資料累積後顯示於此</div>
+    <!-- 圖表一：淨值＋已實現（雙線） -->
+    <div id="chartBox1">
+      <div style="display:flex;gap:12px;padding:0 20px 6px;font-size:11px;font-family:var(--num)">
+        <span style="color:#3b82f6">● 資產淨值</span>
+        <span style="color:#a78bfa">● 已實現損益</span>
+      </div>
+      <div class="chart-box">
+        <canvas id="chartCanvas1" style="width:100%;display:block"></canvas>
+        <div class="empty" id="chartEmpty1" style="display:none">
+          <div class="empty-icon">📈</div>
+          <div class="empty-txt">每次更新股價後自動記錄<br>資料累積後顯示於此</div>
+        </div>
+      </div>
+    </div>
+    <!-- 圖表二：總損益 -->
+    <div id="chartBox2" style="display:none">
+      <div style="display:flex;gap:12px;padding:0 20px 6px;font-size:11px;font-family:var(--num)">
+        <span style="color:#34d399">● 總損益（未實現＋已實現）</span>
+      </div>
+      <div class="chart-box">
+        <canvas id="chartCanvas2" style="width:100%;display:block"></canvas>
+        <div class="empty" id="chartEmpty2" style="display:none">
+          <div class="empty-icon">📊</div>
+          <div class="empty-txt">每次更新股價後自動記錄<br>資料累積後顯示於此</div>
+        </div>
       </div>
     </div>
     <div class="chart-hist" id="chartHist"></div>
@@ -463,9 +483,10 @@ const DEFAULT_STATE = {
   chartMode: 'nav',
   holdings: [],   // { id, symbol, name, market, shares, avgCost }
   realized: [],   // { id, symbol, name, market, shares, cost, sell, date, pnlTWD }
-  prices: {},     // { symbol: price }
+  prices: {},     // { symbol: currentPrice }
+  prevPrices: {}, // { symbol: prevClosePrice }
   lastUpdate: '',
-  navHistory: [], // { month, nav, realized }
+  navHistory: [], // { month, nav, realized, totalPnl }
 };
 
 let S = { ...DEFAULT_STATE };
@@ -496,6 +517,7 @@ function loadState() {
     if (typeof d.lastUpdate === 'string') S.lastUpdate = d.lastUpdate;
     if (Array.isArray(d.navHistory))     S.navHistory = d.navHistory;
     if (typeof d.prices === 'object' && d.prices !== null) S.prices = d.prices;
+    if (typeof d.prevPrices === 'object' && d.prevPrices !== null) S.prevPrices = d.prevPrices;
 
     // Holdings：相容舊版 cost → avgCost
     if (Array.isArray(d.holdings)) {
@@ -603,9 +625,11 @@ async function tryProxy(proxyFn, url) {
     const text = await res.text();
     if (!text.trim().startsWith('{')) throw new Error('not json');
     const d = JSON.parse(text);
-    const price = d?.chart?.result?.[0]?.meta?.regularMarketPrice;
+    const meta  = d?.chart?.result?.[0]?.meta;
+    const price = meta?.regularMarketPrice;
     if (!price || price <= 0) throw new Error('no price in data');
-    return price;
+    const prev  = meta?.chartPreviousClose || meta?.previousClose || price;
+    return { price, prev };
   } catch(e) { clearTimeout(t); throw e; }
 }
 
@@ -620,7 +644,7 @@ function candidates(symbol) {
 async function fetchPrice(symbol) {
   const syms = candidates(symbol);
   const attempts = syms.flatMap(s => {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(s)}?interval=1d&range=1d`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(s)}?interval=1d&range=5d`;
     return PROXIES.map(fn => tryProxy(fn, url));
   });
   return Promise.any(attempts);
@@ -639,13 +663,14 @@ async function refreshPrices() {
   }
 
   const results = await Promise.allSettled(
-    symbols.map(sym => fetchPrice(sym).then(p => ({ sym, p })))
+    symbols.map(sym => fetchPrice(sym).then(r => ({ sym, p: r.price, prev: r.prev })))
   );
 
   let ok = 0, fail = [];
   results.forEach((r, i) => {
     if (r.status === 'fulfilled' && r.value.p > 0) {
-      S.prices[r.value.sym] = r.value.p;
+      S.prices[r.value.sym]     = r.value.p;
+      S.prevPrices[r.value.sym] = r.value.prev;
       ok++;
     } else {
       fail.push(symbols[i]);
@@ -667,7 +692,8 @@ function recordSnapshot() {
   const now = new Date();
   const month = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
   const c = calcAll();
-  const entry = { month, nav: Math.round(c.nav), realized: Math.round(c.realTWD) };
+  const totalPnl = Math.round((c.hasPrices ? c.unrealTWD : 0) + c.realTWD);
+  const entry = { month, nav: Math.round(c.nav), realized: Math.round(c.realTWD), totalPnl };
   const idx = S.navHistory.findIndex(h => h.month === month);
   if (idx >= 0) S.navHistory[idx] = entry;
   else S.navHistory.push(entry);
@@ -753,12 +779,20 @@ function renderHoldings() {
     const weight = c.totalPortfolio > 0 ? mktVal / c.totalPortfolio * 100 : 0;
     const cls = pnl !== null ? upDn(pnl) : '';
 
+    const prevP = S.prevPrices[h.symbol];
+    const dayChg = (hasPrice && prevP && prevP > 0) ? (p - prevP) : null;
+    const dayPct = dayChg !== null ? (dayChg / prevP * 100) : null;
+    const dayStr = dayPct !== null
+      ? `${dayPct >= 0 ? '▲' : '▼'}${Math.abs(dayPct).toFixed(2)}%`
+      : '';
+
     return `<div class="card ${cls}" data-id="${h.id}">
       <div class="card-row">
         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:3px">
           <span class="c-name">${h.name || h.symbol}</span>
           <span class="c-sym">${h.symbol}</span>
           ${hasPrice ? `<span class="c-price">${cur(h.market)} ${p.toFixed(2)}</span>` : ''}
+          ${dayStr ? `<span style="font-size:10px;font-family:var(--num);color:${dayPct>=0?'var(--gain)':'var(--loss)'};background:${dayPct>=0?'rgba(52,211,153,.12)':'rgba(248,113,113,.12)'};border-radius:3px;padding:1px 5px">${dayStr}</span>` : ''}
         </div>
         <span class="c-mkt">${h.market === 'US' ? '🇺🇸' : '🇹🇼'}</span>
       </div>
@@ -815,30 +849,29 @@ function renderSettings() {
   document.getElementById('cRed').classList.toggle('on', S.colorMode === 'red-up');
 }
 
-function renderChart() {
-  const canvas = document.getElementById('chartCanvas');
-  const empty  = document.getElementById('chartEmpty');
-  const hist   = document.getElementById('chartHist');
-  const key    = S.chartMode === 'nav' ? 'nav' : 'realized';
+// 通用畫圖函數：支援雙線
+function drawChart(canvasId, emptyId, datasets) {
+  const canvas = document.getElementById(canvasId);
+  const empty  = document.getElementById(emptyId);
   const data   = S.navHistory;
 
   if (!data.length) {
     canvas.style.display = 'none';
     empty.style.display = 'block';
-    hist.innerHTML = '';
     return;
   }
   canvas.style.display = 'block';
   empty.style.display = 'none';
 
-  const values = data.map(d => d[key] || 0);
-  const minV   = Math.min(...values);
-  const maxV   = Math.max(...values);
-  const range  = maxV - minV || 1;
-  const W      = (canvas.parentElement.clientWidth || 320) - 28;
-  const H      = 180;
-  const DPR    = window.devicePixelRatio || 1;
+  // 找所有數列的全域 min/max
+  const allVals = datasets.flatMap(ds => data.map(d => d[ds.key] || 0));
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const range = maxV - minV || 1;
 
+  const W   = (canvas.parentElement.clientWidth || 320) - 28;
+  const H   = 180;
+  const DPR = window.devicePixelRatio || 1;
   canvas.width  = W * DPR;
   canvas.height = H * DPR;
   canvas.style.width  = W + 'px';
@@ -848,56 +881,73 @@ function renderChart() {
   ctx.scale(DPR, DPR);
   ctx.clearRect(0, 0, W, H);
 
-  const pad = { t:16, r:12, b:28, l:54 };
+  const pad = { t:16, r:12, b:28, l:60 };
   const cW  = W - pad.l - pad.r;
   const cH  = H - pad.t - pad.b;
 
-  // Grid
+  // Y 軸 Grid
   for (let i = 0; i <= 4; i++) {
-    const y = pad.t + (cH / 4) * i;
+    const y   = pad.t + (cH / 4) * i;
+    const val = maxV - (range / 4) * i;
     ctx.strokeStyle = 'rgba(28,46,72,.7)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
-    const val = maxV - (range / 4) * i;
     ctx.fillStyle = '#7a92ad';
-    ctx.font = `10px SF Mono, monospace`;
+    ctx.font = '10px SF Mono, monospace';
     ctx.textAlign = 'right';
-    ctx.fillText('$' + fmt(val), pad.l - 4, y + 3.5);
+    // 大數字縮寫
+    const label = Math.abs(val) >= 10000
+      ? (val >= 0 ? '' : '-') + '$' + fmt(Math.abs(val/1000), 0) + 'K'
+      : (val >= 0 ? '' : '-') + '$' + fmt(Math.abs(val), 0);
+    ctx.fillText(label, pad.l - 4, y + 3.5);
   }
 
-  const pts = data.map((d, i) => ({
-    x: data.length === 1 ? pad.l + cW / 2 : pad.l + (i / (data.length-1)) * cW,
-    y: pad.t + (1 - ((d[key]||0) - minV) / range) * cH
-  }));
-
-  if (data.length > 1) {
-    // 漸層面積
-    const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + cH);
-    grad.addColorStop(0, 'rgba(59,130,246,.25)');
-    grad.addColorStop(1, 'rgba(59,130,246,0)');
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pad.t + cH);
-    pts.forEach(p => ctx.lineTo(p.x, p.y));
-    ctx.lineTo(pts[pts.length-1].x, pad.t + cH);
-    ctx.closePath();
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    // 折線
-    ctx.beginPath();
-    ctx.strokeStyle = '#3b82f6';
-    ctx.lineWidth = 2;
-    ctx.lineJoin = 'round';
-    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-    ctx.stroke();
+  // 零軸
+  if (minV < 0 && maxV > 0) {
+    const zeroY = pad.t + (1 - (0 - minV) / range) * cH;
+    ctx.strokeStyle = 'rgba(148,163,184,.4)';
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(pad.l, zeroY); ctx.lineTo(W - pad.r, zeroY); ctx.stroke();
+    ctx.setLineDash([]);
   }
 
-  // 點
-  pts.forEach(p => {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 3.5, 0, Math.PI*2);
-    ctx.fillStyle = '#60a5fa';
-    ctx.fill();
+  // 每條數列
+  datasets.forEach(ds => {
+    const pts = data.map((d, i) => ({
+      x: data.length === 1 ? pad.l + cW / 2 : pad.l + (i / (data.length-1)) * cW,
+      y: pad.t + (1 - ((d[ds.key]||0) - minV) / range) * cH
+    }));
+
+    if (data.length > 1) {
+      // 漸層面積（只有第一條線）
+      if (ds.fill) {
+        const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + cH);
+        grad.addColorStop(0, ds.fill);
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pad.t + cH);
+        pts.forEach(p => ctx.lineTo(p.x, p.y));
+        ctx.lineTo(pts[pts.length-1].x, pad.t + cH);
+        ctx.closePath();
+        ctx.fillStyle = grad;
+        ctx.fill();
+      }
+      // 折線
+      ctx.beginPath();
+      ctx.strokeStyle = ds.color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+      ctx.stroke();
+    }
+
+    // 點
+    pts.forEach(p => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
+      ctx.fillStyle = ds.color;
+      ctx.fill();
+    });
   });
 
   // X 軸月份
@@ -906,23 +956,67 @@ function renderChart() {
   const step = Math.max(1, Math.ceil(data.length / 6));
   data.forEach((d, i) => {
     if (i % step !== 0 && i !== data.length - 1) return;
-    const x = pts[i].x;
+    const x = data.length === 1 ? pad.l + cW / 2
+      : pad.l + (i / (data.length-1)) * cW;
     ctx.fillText(d.month.slice(5), x, H - 6);
   });
+}
 
-  // 歷史列表
-  hist.innerHTML = [...data].reverse().map((d, i, arr) => {
-    const val  = d[key] || 0;
-    const prev = arr[i+1];
-    const diff = prev ? val - (prev[key] || 0) : null;
-    return `<div class="set-row">
-      <div class="set-label" style="font-family:var(--num)">${d.month}</div>
-      <div style="text-align:right">
-        <div class="set-val" style="color:var(--text)">$${fmt(val)}</div>
-        ${diff !== null ? `<div style="font-size:10px;color:var(--${diff>=0?'gain':'loss'})">月變動 ${diff>=0?'+':'-'}$${fmt(Math.abs(diff))}</div>` : ''}
-      </div>
-    </div>`;
-  }).join('');
+function renderChart() {
+  const data = S.navHistory;
+  const hist = document.getElementById('chartHist');
+  const isNav = S.chartMode === 'nav';
+
+  document.getElementById('chartBox1').style.display = isNav ? 'block' : 'none';
+  document.getElementById('chartBox2').style.display = isNav ? 'none' : 'block';
+
+  if (isNav) {
+    // 圖表一：資產淨值（藍）＋ 已實現損益（紫），雙線
+    drawChart('chartCanvas1', 'chartEmpty1', [
+      { key: 'nav',      color: '#3b82f6', fill: 'rgba(59,130,246,.2)' },
+      { key: 'realized', color: '#a78bfa', fill: null },
+    ]);
+
+    // 歷史列表：顯示淨值＋已實現
+    hist.innerHTML = !data.length ? '' : [...data].reverse().map((d, i, arr) => {
+      const prev = arr[i+1];
+      const navDiff  = prev ? (d.nav||0) - (prev.nav||0) : null;
+      const realDiff = prev ? (d.realized||0) - (prev.realized||0) : null;
+      return `<div class="set-row" style="flex-direction:column;align-items:flex-start;gap:4px">
+        <div style="display:flex;justify-content:space-between;width:100%">
+          <span class="set-label" style="font-family:var(--num)">${d.month}</span>
+          <span style="font-size:11px;color:var(--text2)">淨值 <strong style="color:var(--text);font-family:var(--num)">$${fmt(d.nav||0)}</strong>
+          ${navDiff!==null?`<span style="color:var(--${navDiff>=0?'gain':'loss'});font-size:10px"> ${navDiff>=0?'+':'-'}$${fmt(Math.abs(navDiff))}</span>`:''}
+          </span>
+        </div>
+        <div style="display:flex;justify-content:flex-end;width:100%">
+          <span style="font-size:11px;color:var(--text2)">已實現 <strong style="color:${(d.realized||0)>=0?'var(--gain)':'var(--loss)'};font-family:var(--num)">${pnlStr(d.realized||0)}</strong>
+          ${realDiff!==null?`<span style="color:var(--${realDiff>=0?'gain':'loss'});font-size:10px"> ${realDiff>=0?'+':'-'}$${fmt(Math.abs(realDiff))}</span>`:''}
+          </span>
+        </div>
+      </div>`;
+    }).join('');
+
+  } else {
+    // 圖表二：總損益
+    drawChart('chartCanvas2', 'chartEmpty2', [
+      { key: 'totalPnl', color: '#34d399', fill: 'rgba(52,211,153,.15)' },
+    ]);
+
+    // 歷史列表：顯示總損益
+    hist.innerHTML = !data.length ? '' : [...data].reverse().map((d, i, arr) => {
+      const val  = d.totalPnl || 0;
+      const prev = arr[i+1];
+      const diff = prev ? val - (prev.totalPnl||0) : null;
+      return `<div class="set-row">
+        <div class="set-label" style="font-family:var(--num)">${d.month}</div>
+        <div style="text-align:right">
+          <div style="font-family:var(--num);font-size:14px;color:${val>=0?'var(--gain)':'var(--loss)'}">${pnlStr(val)}</div>
+          ${diff!==null?`<div style="font-size:10px;color:var(--${diff>=0?'gain':'loss'})">月變動 ${diff>=0?'+':'-'}$${fmt(Math.abs(diff))}</div>`:''}
+        </div>
+      </div>`;
+    }).join('');
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1340,12 +1434,12 @@ document.querySelectorAll('#sortBar .pill').forEach(btn => {
 document.getElementById('cNavBtn').addEventListener('click', () => {
   S.chartMode = 'nav';
   document.getElementById('cNavBtn').classList.add('on');
-  document.getElementById('cRealBtn').classList.remove('on');
+  document.getElementById('cTotalBtn').classList.remove('on');
   saveState(); renderChart();
 });
-document.getElementById('cRealBtn').addEventListener('click', () => {
-  S.chartMode = 'realized';
-  document.getElementById('cRealBtn').classList.add('on');
+document.getElementById('cTotalBtn').addEventListener('click', () => {
+  S.chartMode = 'total';
+  document.getElementById('cTotalBtn').classList.add('on');
   document.getElementById('cNavBtn').classList.remove('on');
   saveState(); renderChart();
 });
@@ -1411,8 +1505,8 @@ document.querySelectorAll('#sortBar .pill').forEach(b => {
   b.classList.toggle('on', b.dataset.sort === S.sortMode);
 });
 // 同步圖表按鈕
-document.getElementById('cNavBtn').classList.toggle('on', S.chartMode === 'nav');
-document.getElementById('cRealBtn').classList.toggle('on', S.chartMode === 'realized');
+document.getElementById('cNavBtn').classList.toggle('on', S.chartMode !== 'total');
+document.getElementById('cTotalBtn').classList.toggle('on', S.chartMode === 'total');
 
 renderAll();
 scheduleAuto();
