@@ -133,7 +133,8 @@ button{font-family:var(--ui);cursor:pointer}
 .set-btn{font-size:12px;color:var(--accent2);background:none;border:none;padding:0}
 
 /* ── CHART ── */
-.chart-box{margin:0 20px;background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:14px;overflow:hidden}
+.chart-box{margin:0 20px;background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:14px;overflow:hidden;position:relative}
+.crosshair-info{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(19,32,53,.95);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:11px;font-family:var(--num);white-space:nowrap;pointer-events:none;z-index:5}
 .chart-hist{margin:8px 20px 0;background:var(--s1);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-bottom:16px}
 
 /* ── FORM ── */
@@ -181,7 +182,7 @@ select option{background:var(--s1)}
       <div class="sum-card full hl">
         <div class="sc-label">資產淨值</div>
         <div class="sc-val big" id="s-nav">—</div>
-        <div class="sc-sub">持倉成本 + 閒置現金</div>
+        <div class="sc-sub" id="s-daily-change">持倉成本 + 閒置現金</div>
       </div>
       <div class="sum-card">
         <div class="sc-label">未實現損益</div>
@@ -269,6 +270,7 @@ select option{background:var(--s1)}
     <div class="sort-bar">
       <button class="pill on" id="cNavBtn">淨值＋已實現</button>
       <button class="pill" id="cTotalBtn">總損益</button>
+      <button class="pill" id="cResetZoom" style="margin-left:auto">還原縮放</button>
     </div>
     <!-- 圖表一：淨值＋已實現（雙線） -->
     <div id="chartBox1">
@@ -276,8 +278,9 @@ select option{background:var(--s1)}
         <span style="color:#3b82f6">● 資產淨值</span>
         <span style="color:#a78bfa">● 已實現損益</span>
       </div>
-      <div class="chart-box">
-        <canvas id="chartCanvas1" style="width:100%;display:block"></canvas>
+      <div class="chart-box" id="chartWrap1">
+        <canvas id="chartCanvas1" style="width:100%;display:block;touch-action:none"></canvas>
+        <div class="crosshair-info" id="crosshair1" style="display:none"></div>
         <div class="empty" id="chartEmpty1" style="display:none">
           <div class="empty-icon">📈</div>
           <div class="empty-txt">每次更新股價後自動記錄<br>資料累積後顯示於此</div>
@@ -289,14 +292,16 @@ select option{background:var(--s1)}
       <div style="display:flex;gap:12px;padding:0 20px 6px;font-size:11px;font-family:var(--num)">
         <span style="color:#34d399">● 總損益（未實現＋已實現）</span>
       </div>
-      <div class="chart-box">
-        <canvas id="chartCanvas2" style="width:100%;display:block"></canvas>
+      <div class="chart-box" id="chartWrap2">
+        <canvas id="chartCanvas2" style="width:100%;display:block;touch-action:none"></canvas>
+        <div class="crosshair-info" id="crosshair2" style="display:none"></div>
         <div class="empty" id="chartEmpty2" style="display:none">
           <div class="empty-icon">📊</div>
           <div class="empty-txt">每次更新股價後自動記錄<br>資料累積後顯示於此</div>
         </div>
       </div>
     </div>
+    <div style="padding:4px 20px 0;font-size:10px;color:var(--text2)">💡 雙指縮放查看細節，長按拖動查看日期數值</div>
     <div class="chart-hist" id="chartHist"></div>
   </div>
 
@@ -486,7 +491,7 @@ const DEFAULT_STATE = {
   prices: {},     // { symbol: currentPrice }
   prevPrices: {}, // { symbol: prevClosePrice }
   lastUpdate: '',
-  navHistory: [], // { month, nav, realized, totalPnl }
+  navHistory: [], // { date:'YYYY-MM-DD', nav, realized, totalPnl }
 };
 
 let S = { ...DEFAULT_STATE };
@@ -515,7 +520,16 @@ function loadState() {
     if (typeof d.sortMode === 'string')  S.sortMode = d.sortMode;
     if (typeof d.chartMode === 'string') S.chartMode = d.chartMode;
     if (typeof d.lastUpdate === 'string') S.lastUpdate = d.lastUpdate;
-    if (Array.isArray(d.navHistory))     S.navHistory = d.navHistory;
+    if (Array.isArray(d.navHistory)) {
+      // 相容舊版 month 格式（轉成每月一筆視為當月最後一天）
+      S.navHistory = d.navHistory.map(h => ({
+        date: h.date || (h.month ? h.month + '-01' : ''),
+        nav: h.nav || 0,
+        realized: h.realized || 0,
+        totalPnl: h.totalPnl !== undefined ? h.totalPnl : 0,
+      })).filter(h => h.date);
+      S.navHistory.sort((a,b) => a.date.localeCompare(b.date));
+    }
     if (typeof d.prices === 'object' && d.prices !== null) S.prices = d.prices;
     if (typeof d.prevPrices === 'object' && d.prevPrices !== null) S.prevPrices = d.prevPrices;
 
@@ -625,10 +639,29 @@ async function tryProxy(proxyFn, url) {
     const text = await res.text();
     if (!text.trim().startsWith('{')) throw new Error('not json');
     const d = JSON.parse(text);
-    const meta  = d?.chart?.result?.[0]?.meta;
+    const result = d?.chart?.result?.[0];
+    const meta  = result?.meta;
     const price = meta?.regularMarketPrice;
     if (!price || price <= 0) throw new Error('no price in data');
-    const prev  = meta?.chartPreviousClose || meta?.previousClose || price;
+
+    // 從日線收盤價陣列找「正確的前一交易日收盤價」
+    // closes 陣列最後一筆通常是「今天」(可能尚未收盤、或等於 regularMarketPrice)
+    // 所以前一交易日收盤 = 倒數第二筆有效值
+    let prev = price;
+    const closes = result?.indicators?.quote?.[0]?.close;
+    if (Array.isArray(closes)) {
+      const validCloses = closes.filter(v => typeof v === 'number' && v > 0);
+      if (validCloses.length >= 2) {
+        // 最後一筆若極接近目前報價，視為「今天」，取倒數第二筆作為前收盤
+        const last = validCloses[validCloses.length - 1];
+        const secondLast = validCloses[validCloses.length - 2];
+        prev = Math.abs(last - price) < 0.0001 ? secondLast : last;
+      } else if (validCloses.length === 1) {
+        prev = validCloses[0];
+      }
+    } else {
+      prev = meta?.chartPreviousClose || meta?.previousClose || price;
+    }
     return { price, prev };
   } catch(e) { clearTimeout(t); throw e; }
 }
@@ -690,14 +723,28 @@ async function refreshPrices() {
 // ═══════════════════════════════════════════════════════
 function recordSnapshot() {
   const now = new Date();
-  const month = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const twd = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
+  const date = `${twd.getFullYear()}-${String(twd.getMonth()+1).padStart(2,'0')}-${String(twd.getDate()).padStart(2,'0')}`;
   const c = calcAll();
   const totalPnl = Math.round((c.hasPrices ? c.unrealTWD : 0) + c.realTWD);
-  const entry = { month, nav: Math.round(c.nav), realized: Math.round(c.realTWD), totalPnl };
-  const idx = S.navHistory.findIndex(h => h.month === month);
+  const entry = { date, nav: Math.round(c.nav), realized: Math.round(c.realTWD), totalPnl };
+  const idx = S.navHistory.findIndex(h => h.date === date);
   if (idx >= 0) S.navHistory[idx] = entry;
   else S.navHistory.push(entry);
-  S.navHistory.sort((a,b) => a.month.localeCompare(b.month));
+  S.navHistory.sort((a,b) => a.date.localeCompare(b.date));
+  // 只保留最近 730 天，避免資料無限增長
+  if (S.navHistory.length > 730) S.navHistory = S.navHistory.slice(-730);
+}
+
+// 計算「當日資產漲跌幅度」：今天 vs 最近一筆歷史記錄
+function getDailyChange() {
+  if (S.navHistory.length < 2) return null;
+  const today = S.navHistory[S.navHistory.length - 1];
+  const prevDay = S.navHistory[S.navHistory.length - 2];
+  if (!today || !prevDay) return null;
+  const diff = today.nav - prevDay.nav;
+  const pct = prevDay.nav !== 0 ? (diff / Math.abs(prevDay.nav)) * 100 : 0;
+  return { diff, pct, date: today.date };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -735,6 +782,16 @@ function renderSummary() {
   document.getElementById('s-cash').textContent = '$' + fmt(S.cash);
   document.getElementById('s-cost').textContent = '$' + fmt(c.costTWD);
   document.getElementById('s-principal').textContent = '$' + fmt(S.principal);
+
+  // 當日資產漲跌幅度
+  const dc = getDailyChange();
+  const dcEl = document.getElementById('s-daily-change');
+  if (dc) {
+    const sign = dc.diff >= 0 ? '+' : '-';
+    dcEl.innerHTML = `今日 <span style="color:var(--${dc.diff>=0?'gain':'loss'})">${sign}$${fmt(Math.abs(dc.diff))}（${dc.pct>=0?'+':''}${dc.pct.toFixed(2)}%）</span>`;
+  } else {
+    dcEl.textContent = '持倉成本 + 閒置現金';
+  }
 }
 
 function renderHoldings() {
@@ -849,13 +906,36 @@ function renderSettings() {
   document.getElementById('cRed').classList.toggle('on', S.colorMode === 'red-up');
 }
 
-// 通用畫圖函數：支援雙線
-function drawChart(canvasId, emptyId, datasets) {
+// ═══════════════════════════════════════════════════════
+// CHART STATE：縮放與平移範圍（以索引表示）
+// ═══════════════════════════════════════════════════════
+const chartView = {
+  start: 0,  // 顯示範圍起始索引
+  end: 0,    // 顯示範圍結束索引（不含）
+};
+
+function resetChartView() {
+  const len = S.navHistory.length;
+  chartView.start = 0;
+  chartView.end = len;
+}
+
+// 取得目前縮放範圍內的資料
+function getVisibleData() {
+  const data = S.navHistory;
+  if (!data.length) return [];
+  const s = Math.max(0, Math.min(chartView.start, data.length - 1));
+  const e = Math.max(s + 1, Math.min(chartView.end, data.length));
+  return data.slice(s, e);
+}
+
+// 通用畫圖函數：支援雙線、縮放、十字線
+function drawChart(canvasId, emptyId, crosshairId, datasets) {
   const canvas = document.getElementById(canvasId);
   const empty  = document.getElementById(emptyId);
-  const data   = S.navHistory;
+  const fullData = S.navHistory;
 
-  if (!data.length) {
+  if (!fullData.length) {
     canvas.style.display = 'none';
     empty.style.display = 'block';
     return;
@@ -863,7 +943,9 @@ function drawChart(canvasId, emptyId, datasets) {
   canvas.style.display = 'block';
   empty.style.display = 'none';
 
-  // 找所有數列的全域 min/max
+  const data = getVisibleData();
+  if (!data.length) return;
+
   const allVals = datasets.flatMap(ds => data.map(d => d[ds.key] || 0));
   const minV = Math.min(...allVals);
   const maxV = Math.max(...allVals);
@@ -878,12 +960,16 @@ function drawChart(canvasId, emptyId, datasets) {
   canvas.style.height = H + 'px';
 
   const ctx = canvas.getContext('2d');
+  ctx.setTransform(1,0,0,1,0,0);
   ctx.scale(DPR, DPR);
   ctx.clearRect(0, 0, W, H);
 
   const pad = { t:16, r:12, b:28, l:60 };
   const cW  = W - pad.l - pad.r;
   const cH  = H - pad.t - pad.b;
+
+  // 存到 canvas 上供手勢計算使用
+  canvas._chartMeta = { pad, cW, cH, W, H, data, minV, maxV, range, datasets };
 
   // Y 軸 Grid
   for (let i = 0; i <= 4; i++) {
@@ -895,14 +981,12 @@ function drawChart(canvasId, emptyId, datasets) {
     ctx.fillStyle = '#7a92ad';
     ctx.font = '10px SF Mono, monospace';
     ctx.textAlign = 'right';
-    // 大數字縮寫
     const label = Math.abs(val) >= 10000
       ? (val >= 0 ? '' : '-') + '$' + fmt(Math.abs(val/1000), 0) + 'K'
       : (val >= 0 ? '' : '-') + '$' + fmt(Math.abs(val), 0);
     ctx.fillText(label, pad.l - 4, y + 3.5);
   }
 
-  // 零軸
   if (minV < 0 && maxV > 0) {
     const zeroY = pad.t + (1 - (0 - minV) / range) * cH;
     ctx.strokeStyle = 'rgba(148,163,184,.4)';
@@ -911,7 +995,6 @@ function drawChart(canvasId, emptyId, datasets) {
     ctx.setLineDash([]);
   }
 
-  // 每條數列
   datasets.forEach(ds => {
     const pts = data.map((d, i) => ({
       x: data.length === 1 ? pad.l + cW / 2 : pad.l + (i / (data.length-1)) * cW,
@@ -919,7 +1002,6 @@ function drawChart(canvasId, emptyId, datasets) {
     }));
 
     if (data.length > 1) {
-      // 漸層面積（只有第一條線）
       if (ds.fill) {
         const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + cH);
         grad.addColorStop(0, ds.fill);
@@ -932,7 +1014,6 @@ function drawChart(canvasId, emptyId, datasets) {
         ctx.fillStyle = grad;
         ctx.fill();
       }
-      // 折線
       ctx.beginPath();
       ctx.strokeStyle = ds.color;
       ctx.lineWidth = 2;
@@ -941,50 +1022,101 @@ function drawChart(canvasId, emptyId, datasets) {
       ctx.stroke();
     }
 
-    // 點
-    pts.forEach(p => {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
-      ctx.fillStyle = ds.color;
-      ctx.fill();
-    });
+    // 點只在資料量不多時顯示，避免太密集
+    if (data.length <= 60) {
+      pts.forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2.5, 0, Math.PI*2);
+        ctx.fillStyle = ds.color;
+        ctx.fill();
+      });
+    }
   });
 
-  // X 軸月份
+  // X 軸：只顯示月份標籤（去重複月份）
   ctx.fillStyle = '#7a92ad';
   ctx.textAlign = 'center';
-  const step = Math.max(1, Math.ceil(data.length / 6));
+  ctx.font = '10px SF Mono, monospace';
+  let lastMonth = '';
+  const minGapPx = 44; // 標籤最小間距，避免太密
+  let lastLabelX = -999;
   data.forEach((d, i) => {
-    if (i % step !== 0 && i !== data.length - 1) return;
-    const x = data.length === 1 ? pad.l + cW / 2
-      : pad.l + (i / (data.length-1)) * cW;
-    ctx.fillText(d.month.slice(5), x, H - 6);
+    const month = d.date.slice(0,7);
+    const x = data.length === 1 ? pad.l + cW / 2 : pad.l + (i / (data.length-1)) * cW;
+    if (month !== lastMonth && (x - lastLabelX) > minGapPx) {
+      ctx.fillText(month.slice(5) + '月', x, H - 6);
+      lastLabelX = x;
+      lastMonth = month;
+    }
   });
+
+  // 繪製十字線（如果有設定）
+  const cross = canvas._crosshairIndex;
+  if (cross !== undefined && cross !== null && data[cross]) {
+    const d = data[cross];
+    const x = data.length === 1 ? pad.l + cW/2 : pad.l + (cross / (data.length-1)) * cW;
+    ctx.strokeStyle = 'rgba(255,255,255,.4)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + cH); ctx.stroke();
+    ctx.setLineDash([]);
+
+    datasets.forEach(ds => {
+      const y = pad.t + (1 - ((d[ds.key]||0) - minV) / range) * cH;
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI*2);
+      ctx.fillStyle = ds.color;
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    });
+
+    // 更新十字線資訊框
+    const infoEl = document.getElementById(crosshairId);
+    if (infoEl) {
+      const parts = datasets.map(ds => {
+        const v = d[ds.key] || 0;
+        const label = ds.key === 'nav' ? '淨值' : ds.key === 'realized' ? '已實現' : '總損益';
+        return `<span style="color:${ds.color}">${label} ${pnlStr2(v, ds.key)}</span>`;
+      });
+      infoEl.innerHTML = `<strong>${d.date}</strong>　${parts.join('　')}`;
+      infoEl.style.display = 'block';
+    }
+  } else {
+    const infoEl = document.getElementById(crosshairId);
+    if (infoEl) infoEl.style.display = 'none';
+  }
+}
+
+function pnlStr2(v, key) {
+  if (key === 'nav') return '$' + fmt(v);
+  return pnlStr(v);
 }
 
 function renderChart() {
   const data = S.navHistory;
   const hist = document.getElementById('chartHist');
-  const isNav = S.chartMode === 'nav';
+  const isNav = S.chartMode !== 'total';
+
+  if (chartView.end === 0 || chartView.end > data.length) resetChartView();
 
   document.getElementById('chartBox1').style.display = isNav ? 'block' : 'none';
   document.getElementById('chartBox2').style.display = isNav ? 'none' : 'block';
 
   if (isNav) {
-    // 圖表一：資產淨值（藍）＋ 已實現損益（紫），雙線
-    drawChart('chartCanvas1', 'chartEmpty1', [
+    drawChart('chartCanvas1', 'chartEmpty1', 'crosshair1', [
       { key: 'nav',      color: '#3b82f6', fill: 'rgba(59,130,246,.2)' },
       { key: 'realized', color: '#a78bfa', fill: null },
     ]);
 
-    // 歷史列表：顯示淨值＋已實現
-    hist.innerHTML = !data.length ? '' : [...data].reverse().map((d, i, arr) => {
+    hist.innerHTML = !data.length ? '' : [...data].reverse().slice(0, 60).map((d, i, arr) => {
       const prev = arr[i+1];
       const navDiff  = prev ? (d.nav||0) - (prev.nav||0) : null;
       const realDiff = prev ? (d.realized||0) - (prev.realized||0) : null;
       return `<div class="set-row" style="flex-direction:column;align-items:flex-start;gap:4px">
         <div style="display:flex;justify-content:space-between;width:100%">
-          <span class="set-label" style="font-family:var(--num)">${d.month}</span>
+          <span class="set-label" style="font-family:var(--num)">${d.date}</span>
           <span style="font-size:11px;color:var(--text2)">淨值 <strong style="color:var(--text);font-family:var(--num)">$${fmt(d.nav||0)}</strong>
           ${navDiff!==null?`<span style="color:var(--${navDiff>=0?'gain':'loss'});font-size:10px"> ${navDiff>=0?'+':'-'}$${fmt(Math.abs(navDiff))}</span>`:''}
           </span>
@@ -998,26 +1130,113 @@ function renderChart() {
     }).join('');
 
   } else {
-    // 圖表二：總損益
-    drawChart('chartCanvas2', 'chartEmpty2', [
+    drawChart('chartCanvas2', 'chartEmpty2', 'crosshair2', [
       { key: 'totalPnl', color: '#34d399', fill: 'rgba(52,211,153,.15)' },
     ]);
 
-    // 歷史列表：顯示總損益
-    hist.innerHTML = !data.length ? '' : [...data].reverse().map((d, i, arr) => {
+    hist.innerHTML = !data.length ? '' : [...data].reverse().slice(0, 60).map((d, i, arr) => {
       const val  = d.totalPnl || 0;
       const prev = arr[i+1];
       const diff = prev ? val - (prev.totalPnl||0) : null;
       return `<div class="set-row">
-        <div class="set-label" style="font-family:var(--num)">${d.month}</div>
+        <div class="set-label" style="font-family:var(--num)">${d.date}</div>
         <div style="text-align:right">
           <div style="font-family:var(--num);font-size:14px;color:${val>=0?'var(--gain)':'var(--loss)'}">${pnlStr(val)}</div>
-          ${diff!==null?`<div style="font-size:10px;color:var(--${diff>=0?'gain':'loss'})">月變動 ${diff>=0?'+':'-'}$${fmt(Math.abs(diff))}</div>`:''}
+          ${diff!==null?`<div style="font-size:10px;color:var(--${diff>=0?'gain':'loss'})">變動 ${diff>=0?'+':'-'}$${fmt(Math.abs(diff))}</div>`:''}
         </div>
       </div>`;
     }).join('');
   }
 }
+
+// ═══════════════════════════════════════════════════════
+// CHART GESTURES：雙指縮放 + 長按拖動十字線
+// ═══════════════════════════════════════════════════════
+function setupChartGestures(canvasId, crosshairId) {
+  const canvas = document.getElementById(canvasId);
+  let pinchStartDist = null;
+  let pinchStartView = null;
+  let longPressTimer = null;
+  let isDragging = false;
+
+  function getTouchDist(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx*dx + dy*dy);
+  }
+
+  function xToIndex(clientX) {
+    const meta = canvas._chartMeta;
+    if (!meta) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const relX = (x - meta.pad.l) / meta.cW;
+    const idx = Math.round(relX * (meta.data.length - 1));
+    return Math.max(0, Math.min(meta.data.length - 1, idx));
+  }
+
+  canvas.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) {
+      // 雙指縮放開始
+      e.preventDefault();
+      pinchStartDist = getTouchDist(e.touches);
+      pinchStartView = { ...chartView };
+      clearTimeout(longPressTimer);
+    } else if (e.touches.length === 1) {
+      // 可能是長按拖動
+      longPressTimer = setTimeout(() => {
+        isDragging = true;
+        const idx = xToIndex(e.touches[0].clientX);
+        canvas._crosshairIndex = idx;
+        renderChart();
+      }, 280);
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', e => {
+    if (e.touches.length === 2 && pinchStartDist !== null) {
+      e.preventDefault();
+      const dist = getTouchDist(e.touches);
+      const scale = pinchStartDist / dist; // >1 = 放大(縮小範圍), <1 = 縮小(擴大範圍)
+      const fullLen = S.navHistory.length;
+      const startLen = pinchStartView.end - pinchStartView.start;
+      const center = (pinchStartView.start + pinchStartView.end) / 2;
+      let newLen = Math.round(startLen * scale);
+      newLen = Math.max(5, Math.min(fullLen, newLen));
+      let newStart = Math.round(center - newLen / 2);
+      let newEnd = newStart + newLen;
+      if (newStart < 0) { newStart = 0; newEnd = newLen; }
+      if (newEnd > fullLen) { newEnd = fullLen; newStart = fullLen - newLen; }
+      chartView.start = newStart;
+      chartView.end = newEnd;
+      renderChart();
+    } else if (e.touches.length === 1 && isDragging) {
+      e.preventDefault();
+      const idx = xToIndex(e.touches[0].clientX);
+      canvas._crosshairIndex = idx;
+      renderChart();
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', e => {
+    clearTimeout(longPressTimer);
+    pinchStartDist = null;
+    pinchStartView = null;
+    if (isDragging) {
+      isDragging = false;
+      canvas._crosshairIndex = null;
+      renderChart();
+    }
+  });
+  canvas.addEventListener('touchcancel', () => {
+    clearTimeout(longPressTimer);
+    pinchStartDist = null;
+    isDragging = false;
+    canvas._crosshairIndex = null;
+    renderChart();
+  });
+}
+
 
 // ═══════════════════════════════════════════════════════
 // TRADE PAGE
@@ -1418,7 +1637,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
     btn.classList.add('on');
     document.getElementById('page-' + btn.dataset.page).classList.add('on');
-    if (btn.dataset.page === 'chart') renderChart();
+    if (btn.dataset.page === 'chart') { resetChartView(); renderChart(); }
   });
 });
 
@@ -1442,6 +1661,11 @@ document.getElementById('cTotalBtn').addEventListener('click', () => {
   document.getElementById('cTotalBtn').classList.add('on');
   document.getElementById('cNavBtn').classList.remove('on');
   saveState(); renderChart();
+});
+document.getElementById('cResetZoom').addEventListener('click', () => {
+  resetChartView();
+  renderChart();
+  toast('已還原縮放');
 });
 
 // ═══════════════════════════════════════════════════════
@@ -1507,6 +1731,10 @@ document.querySelectorAll('#sortBar .pill').forEach(b => {
 // 同步圖表按鈕
 document.getElementById('cNavBtn').classList.toggle('on', S.chartMode !== 'total');
 document.getElementById('cTotalBtn').classList.toggle('on', S.chartMode === 'total');
+
+resetChartView();
+setupChartGestures('chartCanvas1', 'crosshair1');
+setupChartGestures('chartCanvas2', 'crosshair2');
 
 renderAll();
 scheduleAuto();
