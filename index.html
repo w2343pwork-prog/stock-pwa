@@ -267,41 +267,42 @@ select option{background:var(--s1)}
   <!-- 圖表 -->
   <div class="page" id="page-chart">
     <div class="sec-hdr"><div class="sec-title">歷史走勢</div></div>
-    <div class="sort-bar">
-      <button class="pill on" id="cNavBtn">淨值＋已實現</button>
-      <button class="pill" id="cTotalBtn">總損益</button>
-      <button class="pill" id="cResetZoom" style="margin-left:auto">還原縮放</button>
+
+    <!-- 圖例 -->
+    <div style="display:flex;gap:14px;padding:0 20px 8px;font-size:11px;font-family:var(--num)">
+      <span style="color:#3b82f6">● 資產淨值</span>
+      <span style="color:#a78bfa">● 已實現損益</span>
     </div>
-    <!-- 圖表一：淨值＋已實現（雙線） -->
-    <div id="chartBox1">
-      <div style="display:flex;gap:12px;padding:0 20px 6px;font-size:11px;font-family:var(--num)">
-        <span style="color:#3b82f6">● 資產淨值</span>
-        <span style="color:#a78bfa">● 已實現損益</span>
-      </div>
-      <div class="chart-box" id="chartWrap1">
-        <canvas id="chartCanvas1" style="width:100%;display:block;touch-action:none"></canvas>
-        <div class="crosshair-info" id="crosshair1" style="display:none"></div>
-        <div class="empty" id="chartEmpty1" style="display:none">
-          <div class="empty-icon">📈</div>
-          <div class="empty-txt">每次更新股價後自動記錄<br>資料累積後顯示於此</div>
-        </div>
+
+    <!-- 圖表主體 -->
+    <div class="chart-box" style="position:relative;padding:12px 12px 32px">
+      <canvas id="chartCanvas" style="width:100%;display:block;touch-action:none"></canvas>
+      <div class="crosshair-info" id="chartTooltip" style="display:none;position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(13,23,38,.95);border:1px solid var(--border);border-radius:8px;padding:7px 14px;font-size:11px;font-family:var(--num);white-space:nowrap;pointer-events:none;z-index:5"></div>
+      <div class="empty" id="chartEmpty" style="display:none;padding:32px 0">
+        <div class="empty-icon">📈</div>
+        <div class="empty-txt">進行買賣交易後<br>資料會記錄在這裡</div>
       </div>
     </div>
-    <!-- 圖表二：總損益 -->
-    <div id="chartBox2" style="display:none">
-      <div style="display:flex;gap:12px;padding:0 20px 6px;font-size:11px;font-family:var(--num)">
-        <span style="color:#34d399">● 總損益（未實現＋已實現）</span>
-      </div>
-      <div class="chart-box" id="chartWrap2">
-        <canvas id="chartCanvas2" style="width:100%;display:block;touch-action:none"></canvas>
-        <div class="crosshair-info" id="crosshair2" style="display:none"></div>
-        <div class="empty" id="chartEmpty2" style="display:none">
-          <div class="empty-icon">📊</div>
-          <div class="empty-txt">每次更新股價後自動記錄<br>資料累積後顯示於此</div>
-        </div>
-      </div>
+
+    <!-- 時間範圍選擇 -->
+    <div class="sort-bar" id="chartRangeBar" style="padding:10px 20px 4px">
+      <button class="pill" data-range="7">近一週</button>
+      <button class="pill on" data-range="30">近一月</button>
+      <button class="pill" data-range="90">近三月</button>
+      <button class="pill" data-range="365">近一年</button>
+      <button class="pill" data-range="0">全部</button>
     </div>
-    <div style="padding:4px 20px 0;font-size:10px;color:var(--text2)">💡 雙指縮放查看細節，長按拖動查看日期數值</div>
+
+    <!-- 自訂時間範圍 -->
+    <div style="padding:4px 20px 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--text2)">自訂：</span>
+      <input type="date" id="chartDateFrom" style="flex:1;min-width:120px;padding:6px 10px;font-size:13px"/>
+      <span style="font-size:11px;color:var(--text2)">～</span>
+      <input type="date" id="chartDateTo" style="flex:1;min-width:120px;padding:6px 10px;font-size:13px"/>
+      <button class="pill on" id="chartCustomApply" style="padding:6px 12px">套用</button>
+    </div>
+
+    <div style="padding:2px 20px 0;font-size:10px;color:var(--text2)">💡 點擊圖表上的點查看當日數值</div>
     <div class="chart-hist" id="chartHist"></div>
   </div>
 
@@ -491,7 +492,7 @@ const DEFAULT_STATE = {
   prices: {},     // { symbol: currentPrice }
   prevPrices: {}, // { symbol: prevClosePrice }
   lastUpdate: '',
-  navHistory: [], // { date:'YYYY-MM-DD', nav, realized, totalPnl }
+  navHistory: [], // { date:'YYYY-MM-DD', nav, realized } 只在有交易時記錄
 };
 
 let S = { ...DEFAULT_STATE };
@@ -526,7 +527,6 @@ function loadState() {
         date: h.date || (h.month ? h.month + '-01' : ''),
         nav: h.nav || 0,
         realized: h.realized || 0,
-        totalPnl: h.totalPnl !== undefined ? h.totalPnl : 0,
       })).filter(h => h.date);
       S.navHistory.sort((a,b) => a.date.localeCompare(b.date));
     }
@@ -711,7 +711,6 @@ async function refreshPrices() {
   });
 
   S.lastUpdate = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-  recordSnapshot();
   saveState();
   renderAll();
   btn.classList.remove('spin');
@@ -721,30 +720,32 @@ async function refreshPrices() {
 // ═══════════════════════════════════════════════════════
 // SNAPSHOT
 // ═══════════════════════════════════════════════════════
-function recordSnapshot() {
+function todayDateStr() {
   const now = new Date();
   const twd = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Taipei' }));
-  const date = `${twd.getFullYear()}-${String(twd.getMonth()+1).padStart(2,'0')}-${String(twd.getDate()).padStart(2,'0')}`;
+  return `${twd.getFullYear()}-${String(twd.getMonth()+1).padStart(2,'0')}-${String(twd.getDate()).padStart(2,'0')}`;
+}
+
+// 只在有操作時呼叫（買賣/新增資金/手動調整）
+function recordSnapshot() {
+  const date = todayDateStr();
   const c = calcAll();
-  const totalPnl = Math.round((c.hasPrices ? c.unrealTWD : 0) + c.realTWD);
-  const entry = { date, nav: Math.round(c.nav), realized: Math.round(c.realTWD), totalPnl };
+  const entry = { date, nav: Math.round(c.nav), realized: Math.round(c.realTWD) };
   const idx = S.navHistory.findIndex(h => h.date === date);
   if (idx >= 0) S.navHistory[idx] = entry;
   else S.navHistory.push(entry);
   S.navHistory.sort((a,b) => a.date.localeCompare(b.date));
-  // 只保留最近 730 天，避免資料無限增長
-  if (S.navHistory.length > 730) S.navHistory = S.navHistory.slice(-730);
+  if (S.navHistory.length > 1000) S.navHistory = S.navHistory.slice(-1000);
 }
 
-// 計算「當日資產漲跌幅度」：今天 vs 最近一筆歷史記錄
+// 最近兩筆記錄的淨值變動
 function getDailyChange() {
   if (S.navHistory.length < 2) return null;
-  const today = S.navHistory[S.navHistory.length - 1];
-  const prevDay = S.navHistory[S.navHistory.length - 2];
-  if (!today || !prevDay) return null;
-  const diff = today.nav - prevDay.nav;
-  const pct = prevDay.nav !== 0 ? (diff / Math.abs(prevDay.nav)) * 100 : 0;
-  return { diff, pct, date: today.date };
+  const last = S.navHistory[S.navHistory.length - 1];
+  const prev = S.navHistory[S.navHistory.length - 2];
+  const diff = last.nav - prev.nav;
+  const pct  = prev.nav !== 0 ? (diff / Math.abs(prev.nav)) * 100 : 0;
+  return { diff, pct, date: last.date };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -907,52 +908,70 @@ function renderSettings() {
 }
 
 // ═══════════════════════════════════════════════════════
-// CHART STATE：縮放與平移範圍（以索引表示）
 // ═══════════════════════════════════════════════════════
-const chartView = {
-  start: 0,  // 顯示範圍起始索引
-  end: 0,    // 顯示範圍結束索引（不含）
-};
+// CHART：時間範圍 + Y軸截斷 + 雙線 + 點擊查詢
+// ═══════════════════════════════════════════════════════
 
-function resetChartView() {
-  const len = S.navHistory.length;
-  chartView.start = 0;
-  chartView.end = len;
+// 目前選取的時間範圍（天數，0 = 全部，-1 = 自訂）
+let chartRangeDays = 30;
+let chartCustomFrom = '';
+let chartCustomTo   = '';
+
+function getChartData() {
+  const all = S.navHistory;
+  if (!all.length) return [];
+  if (chartRangeDays === 0) return all;
+  if (chartRangeDays === -1) {
+    // 自訂區間
+    return all.filter(h => {
+      if (chartCustomFrom && h.date < chartCustomFrom) return false;
+      if (chartCustomTo   && h.date > chartCustomTo)   return false;
+      return true;
+    });
+  }
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - chartRangeDays);
+  const cutStr = cutoff.toISOString().slice(0,10);
+  return all.filter(h => h.date >= cutStr);
 }
 
-// 取得目前縮放範圍內的資料
-function getVisibleData() {
-  const data = S.navHistory;
-  if (!data.length) return [];
-  const s = Math.max(0, Math.min(chartView.start, data.length - 1));
-  const e = Math.max(s + 1, Math.min(chartView.end, data.length));
-  return data.slice(s, e);
+// Y 軸截斷：當兩組數值範圍差距超過 3 倍時啟用
+// 回傳 { useBreak, y1Min, y1Max, y2Min, y2Max }
+function calcYAxes(data) {
+  const navVals  = data.map(d => d.nav      || 0);
+  const realVals = data.map(d => d.realized || 0);
+  const navMin  = Math.min(...navVals);
+  const navMax  = Math.max(...navVals);
+  const realMin = Math.min(...realVals);
+  const realMax = Math.max(...realVals);
+  const navRange  = navMax  - navMin  || 1;
+  const realRange = realMax - realMin || 1;
+  // 差距超過 4 倍才截斷
+  const useBreak = navRange / realRange > 4 || realRange / navRange > 4;
+  return { useBreak, navMin, navMax, realMin, realMax, navRange, realRange };
 }
 
-// 通用畫圖函數：支援雙線、縮放、十字線
-function drawChart(canvasId, emptyId, crosshairId, datasets) {
-  const canvas = document.getElementById(canvasId);
-  const empty  = document.getElementById(emptyId);
-  const fullData = S.navHistory;
+function renderChart() {
+  const canvas   = document.getElementById('chartCanvas');
+  const emptyEl  = document.getElementById('chartEmpty');
+  const hist     = document.getElementById('chartHist');
+  const tooltip  = document.getElementById('chartTooltip');
 
-  if (!fullData.length) {
+  const data = getChartData();
+
+  if (!data.length) {
     canvas.style.display = 'none';
-    empty.style.display = 'block';
+    emptyEl.style.display = 'block';
+    hist.innerHTML = '';
+    tooltip.style.display = 'none';
     return;
   }
   canvas.style.display = 'block';
-  empty.style.display = 'none';
+  emptyEl.style.display = 'none';
 
-  const data = getVisibleData();
-  if (!data.length) return;
-
-  const allVals = datasets.flatMap(ds => data.map(d => d[ds.key] || 0));
-  const minV = Math.min(...allVals);
-  const maxV = Math.max(...allVals);
-  const range = maxV - minV || 1;
-
-  const W   = (canvas.parentElement.clientWidth || 320) - 28;
-  const H   = 180;
+  const ax = calcYAxes(data);
+  const W   = (canvas.parentElement.clientWidth || 320) - 24;
+  const H   = 200;
   const DPR = window.devicePixelRatio || 1;
   canvas.width  = W * DPR;
   canvas.height = H * DPR;
@@ -964,669 +983,204 @@ function drawChart(canvasId, emptyId, crosshairId, datasets) {
   ctx.scale(DPR, DPR);
   ctx.clearRect(0, 0, W, H);
 
-  const pad = { t:16, r:12, b:28, l:60 };
+  // 版面
+  const pad = { t:14, r:12, b:30, l:64 };
   const cW  = W - pad.l - pad.r;
-  const cH  = H - pad.t - pad.b;
 
-  // 存到 canvas 上供手勢計算使用
-  canvas._chartMeta = { pad, cW, cH, W, H, data, minV, maxV, range, datasets };
+  // 截斷模式：把畫布分成上下兩塊
+  // 上塊：淨值（較大），下塊：已實現損益（較小）
+  // 不截斷：共用同一塊
+  let zones; // [{key, color, fill, min, max, range, yTop, yBot}]
+  const BREAK_GAP = 10; // 截斷間隔像素
 
-  // Y 軸 Grid
-  for (let i = 0; i <= 4; i++) {
-    const y   = pad.t + (cH / 4) * i;
-    const val = maxV - (range / 4) * i;
-    ctx.strokeStyle = 'rgba(28,46,72,.7)';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
-    ctx.fillStyle = '#7a92ad';
-    ctx.font = '10px SF Mono, monospace';
-    ctx.textAlign = 'right';
-    const label = Math.abs(val) >= 10000
-      ? (val >= 0 ? '' : '-') + '$' + fmt(Math.abs(val/1000), 0) + 'K'
-      : (val >= 0 ? '' : '-') + '$' + fmt(Math.abs(val), 0);
-    ctx.fillText(label, pad.l - 4, y + 3.5);
+  if (ax.useBreak) {
+    const upperH = Math.round((H - pad.t - pad.b - BREAK_GAP) * 0.55);
+    const lowerH = (H - pad.t - pad.b - BREAK_GAP) - upperH;
+    zones = [
+      { key:'nav',      color:'#3b82f6', fill:'rgba(59,130,246,.15)',
+        min: ax.navMin,  max: ax.navMax,  range: ax.navRange,
+        yTop: pad.t, yBot: pad.t + upperH },
+      { key:'realized', color:'#a78bfa', fill:'rgba(167,139,250,.1)',
+        min: ax.realMin, max: ax.realMax, range: ax.realRange,
+        yTop: pad.t + upperH + BREAK_GAP, yBot: H - pad.b },
+    ];
+  } else {
+    // 不截斷：兩條線共用同一個 Y 軸（找全域 min/max）
+    const allMin = Math.min(ax.navMin, ax.realMin);
+    const allMax = Math.max(ax.navMax, ax.realMax);
+    const allRange = allMax - allMin || 1;
+    zones = [
+      { key:'nav',      color:'#3b82f6', fill:'rgba(59,130,246,.15)',
+        min: allMin, max: allMax, range: allRange,
+        yTop: pad.t, yBot: H - pad.b },
+      { key:'realized', color:'#a78bfa', fill:null,
+        min: allMin, max: allMax, range: allRange,
+        yTop: pad.t, yBot: H - pad.b },
+    ];
   }
 
-  if (minV < 0 && maxV > 0) {
-    const zeroY = pad.t + (1 - (0 - minV) / range) * cH;
-    ctx.strokeStyle = 'rgba(148,163,184,.4)';
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath(); ctx.moveTo(pad.l, zeroY); ctx.lineTo(W - pad.r, zeroY); ctx.stroke();
-    ctx.setLineDash([]);
-  }
+  // 畫每個 zone
+  zones.forEach((z, zi) => {
+    const zH = z.yBot - z.yTop;
 
-  datasets.forEach(ds => {
+    // Grid lines（只在最上面 zone 和最下面 zone 各畫）
+    const gridCount = ax.useBreak ? 3 : 4;
+    for (let i = 0; i <= gridCount; i++) {
+      const y   = z.yTop + (zH / gridCount) * i;
+      const val = z.max - (z.range / gridCount) * i;
+      ctx.strokeStyle = 'rgba(28,46,72,.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+      ctx.fillStyle = zi === 0 ? '#7a92ad' : '#a78bfa99';
+      ctx.font = '9px SF Mono, monospace';
+      ctx.textAlign = 'right';
+      const label = Math.abs(val) >= 100000
+        ? (val<0?'-':'')+'$'+Math.round(Math.abs(val)/1000)+'K'
+        : (val<0?'-':'')+'$'+Math.round(Math.abs(val)).toLocaleString();
+      ctx.fillText(label, pad.l - 3, y + 3.5);
+    }
+
+    // 零軸
+    if (z.min < 0 && z.max > 0) {
+      const zy = z.yTop + (1 - (0 - z.min) / z.range) * zH;
+      ctx.strokeStyle = 'rgba(148,163,184,.35)';
+      ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(pad.l, zy); ctx.lineTo(W-pad.r, zy); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // 截斷符號（鋸齒線）
+    if (ax.useBreak && zi === 0) {
+      const breakY = z.yBot + BREAK_GAP / 2;
+      ctx.strokeStyle = 'rgba(148,163,184,.5)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      let bx = pad.l;
+      ctx.moveTo(bx, breakY);
+      while (bx < W - pad.r) {
+        ctx.lineTo(bx + 6, breakY - 4);
+        ctx.lineTo(bx + 12, breakY + 4);
+        ctx.lineTo(bx + 18, breakY);
+        bx += 18;
+      }
+      ctx.stroke();
+    }
+
+    // 計算每個點的座標
     const pts = data.map((d, i) => ({
       x: data.length === 1 ? pad.l + cW / 2 : pad.l + (i / (data.length-1)) * cW,
-      y: pad.t + (1 - ((d[ds.key]||0) - minV) / range) * cH
+      y: z.yTop + (1 - ((d[z.key]||0) - z.min) / z.range) * zH,
+      d: d,
     }));
 
-    if (data.length > 1) {
-      if (ds.fill) {
-        const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + cH);
-        grad.addColorStop(0, ds.fill);
-        grad.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pad.t + cH);
-        pts.forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.lineTo(pts[pts.length-1].x, pad.t + cH);
-        ctx.closePath();
-        ctx.fillStyle = grad;
-        ctx.fill();
-      }
+    // 漸層面積
+    if (z.fill && pts.length > 1) {
+      const grad = ctx.createLinearGradient(0, z.yTop, 0, z.yBot);
+      grad.addColorStop(0, z.fill);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.beginPath();
-      ctx.strokeStyle = ds.color;
+      ctx.moveTo(pts[0].x, z.yBot);
+      pts.forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.lineTo(pts[pts.length-1].x, z.yBot);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+
+    // 折線
+    if (pts.length > 1) {
+      ctx.beginPath();
+      ctx.strokeStyle = z.color;
       ctx.lineWidth = 2;
       ctx.lineJoin = 'round';
       pts.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
       ctx.stroke();
     }
 
-    // 點只在資料量不多時顯示，避免太密集
-    if (data.length <= 60) {
+    // 資料點（只在 <= 90 筆時畫點，否則太密）
+    if (data.length <= 90) {
       pts.forEach(p => {
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 2.5, 0, Math.PI*2);
-        ctx.fillStyle = ds.color;
+        ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
+        ctx.fillStyle = z.color;
         ctx.fill();
       });
     }
+
+    // 儲存 pts 到 canvas 供點擊使用（只存第一個 zone）
+    if (zi === 0) canvas._chartPts = pts;
   });
 
-  // X 軸：只顯示月份標籤（去重複月份）
+  // X 軸月份標籤
   ctx.fillStyle = '#7a92ad';
   ctx.textAlign = 'center';
   ctx.font = '10px SF Mono, monospace';
   let lastMonth = '';
-  const minGapPx = 44; // 標籤最小間距，避免太密
   let lastLabelX = -999;
   data.forEach((d, i) => {
     const month = d.date.slice(0,7);
-    const x = data.length === 1 ? pad.l + cW / 2 : pad.l + (i / (data.length-1)) * cW;
-    if (month !== lastMonth && (x - lastLabelX) > minGapPx) {
-      ctx.fillText(month.slice(5) + '月', x, H - 6);
+    const x = data.length === 1 ? pad.l + cW/2 : pad.l + (i/(data.length-1))*cW;
+    if (month !== lastMonth && (x - lastLabelX) > 40) {
+      ctx.fillText(d.date.slice(5,7)+'月', x, H - 6);
       lastLabelX = x;
       lastMonth = month;
     }
   });
 
-  // 繪製十字線（如果有設定）
-  const cross = canvas._crosshairIndex;
-  if (cross !== undefined && cross !== null && data[cross]) {
-    const d = data[cross];
-    const x = data.length === 1 ? pad.l + cW/2 : pad.l + (cross / (data.length-1)) * cW;
-    ctx.strokeStyle = 'rgba(255,255,255,.4)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3,3]);
-    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + cH); ctx.stroke();
-    ctx.setLineDash([]);
-
-    datasets.forEach(ds => {
-      const y = pad.t + (1 - ((d[ds.key]||0) - minV) / range) * cH;
-      ctx.beginPath();
-      ctx.arc(x, y, 4, 0, Math.PI*2);
-      ctx.fillStyle = ds.color;
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-    });
-
-    // 更新十字線資訊框
-    const infoEl = document.getElementById(crosshairId);
-    if (infoEl) {
-      const parts = datasets.map(ds => {
-        const v = d[ds.key] || 0;
-        const label = ds.key === 'nav' ? '淨值' : ds.key === 'realized' ? '已實現' : '總損益';
-        return `<span style="color:${ds.color}">${label} ${pnlStr2(v, ds.key)}</span>`;
-      });
-      infoEl.innerHTML = `<strong>${d.date}</strong>　${parts.join('　')}`;
-      infoEl.style.display = 'block';
-    }
-  } else {
-    const infoEl = document.getElementById(crosshairId);
-    if (infoEl) infoEl.style.display = 'none';
-  }
+  // 歷史列表（最新 30 筆）
+  hist.innerHTML = [...data].reverse().slice(0, 30).map((d, i, arr) => {
+    const prev = arr[i+1];
+    const navDiff  = prev ? (d.nav||0)-(prev.nav||0) : null;
+    const realDiff = prev ? (d.realized||0)-(prev.realized||0) : null;
+    return `<div class="set-row" style="flex-direction:column;align-items:flex-start;gap:2px">
+      <div style="display:flex;justify-content:space-between;width:100%">
+        <span class="set-label" style="font-family:var(--num);font-size:12px">${d.date}</span>
+        <span style="font-size:11px;color:var(--text2)">淨值 <strong style="color:var(--text);font-family:var(--num)">$${fmt(d.nav||0)}</strong>${navDiff!==null?` <span style="color:var(--${navDiff>=0?'gain':'loss'});font-size:10px">${navDiff>=0?'+':'-'}$${fmt(Math.abs(navDiff))}</span>`:''}</span>
+      </div>
+      <div style="display:flex;justify-content:flex-end;width:100%">
+        <span style="font-size:11px;color:var(--text2)">已實現 <strong style="color:${(d.realized||0)>=0?'var(--gain)':'var(--loss)'};font-family:var(--num)">${pnlStr(d.realized||0)}</strong>${realDiff!==null?` <span style="color:var(--${realDiff>=0?'gain':'loss'});font-size:10px">${realDiff>=0?'+':'-'}$${fmt(Math.abs(realDiff))}</span>`:''}</span>
+      </div>
+    </div>`;
+  }).join('');
 }
 
-function pnlStr2(v, key) {
-  if (key === 'nav') return '$' + fmt(v);
-  return pnlStr(v);
-}
+// ── 點擊圖表顯示當日數值 ──
+function setupChartClick() {
+  const canvas  = document.getElementById('chartCanvas');
+  const tooltip = document.getElementById('chartTooltip');
+  let hideTimer = null;
 
-function renderChart() {
-  const data = S.navHistory;
-  const hist = document.getElementById('chartHist');
-  const isNav = S.chartMode !== 'total';
-
-  if (chartView.end === 0 || chartView.end > data.length) resetChartView();
-
-  document.getElementById('chartBox1').style.display = isNav ? 'block' : 'none';
-  document.getElementById('chartBox2').style.display = isNav ? 'none' : 'block';
-
-  if (isNav) {
-    drawChart('chartCanvas1', 'chartEmpty1', 'crosshair1', [
-      { key: 'nav',      color: '#3b82f6', fill: 'rgba(59,130,246,.2)' },
-      { key: 'realized', color: '#a78bfa', fill: null },
-    ]);
-
-    hist.innerHTML = !data.length ? '' : [...data].reverse().slice(0, 60).map((d, i, arr) => {
-      const prev = arr[i+1];
-      const navDiff  = prev ? (d.nav||0) - (prev.nav||0) : null;
-      const realDiff = prev ? (d.realized||0) - (prev.realized||0) : null;
-      return `<div class="set-row" style="flex-direction:column;align-items:flex-start;gap:4px">
-        <div style="display:flex;justify-content:space-between;width:100%">
-          <span class="set-label" style="font-family:var(--num)">${d.date}</span>
-          <span style="font-size:11px;color:var(--text2)">淨值 <strong style="color:var(--text);font-family:var(--num)">$${fmt(d.nav||0)}</strong>
-          ${navDiff!==null?`<span style="color:var(--${navDiff>=0?'gain':'loss'});font-size:10px"> ${navDiff>=0?'+':'-'}$${fmt(Math.abs(navDiff))}</span>`:''}
-          </span>
-        </div>
-        <div style="display:flex;justify-content:flex-end;width:100%">
-          <span style="font-size:11px;color:var(--text2)">已實現 <strong style="color:${(d.realized||0)>=0?'var(--gain)':'var(--loss)'};font-family:var(--num)">${pnlStr(d.realized||0)}</strong>
-          ${realDiff!==null?`<span style="color:var(--${realDiff>=0?'gain':'loss'});font-size:10px"> ${realDiff>=0?'+':'-'}$${fmt(Math.abs(realDiff))}</span>`:''}
-          </span>
-        </div>
-      </div>`;
-    }).join('');
-
-  } else {
-    drawChart('chartCanvas2', 'chartEmpty2', 'crosshair2', [
-      { key: 'totalPnl', color: '#34d399', fill: 'rgba(52,211,153,.15)' },
-    ]);
-
-    hist.innerHTML = !data.length ? '' : [...data].reverse().slice(0, 60).map((d, i, arr) => {
-      const val  = d.totalPnl || 0;
-      const prev = arr[i+1];
-      const diff = prev ? val - (prev.totalPnl||0) : null;
-      return `<div class="set-row">
-        <div class="set-label" style="font-family:var(--num)">${d.date}</div>
-        <div style="text-align:right">
-          <div style="font-family:var(--num);font-size:14px;color:${val>=0?'var(--gain)':'var(--loss)'}">${pnlStr(val)}</div>
-          ${diff!==null?`<div style="font-size:10px;color:var(--${diff>=0?'gain':'loss'})">變動 ${diff>=0?'+':'-'}$${fmt(Math.abs(diff))}</div>`:''}
-        </div>
-      </div>`;
-    }).join('');
-  }
-}
-
-// ═══════════════════════════════════════════════════════
-// CHART GESTURES：雙指縮放 + 長按拖動十字線
-// ═══════════════════════════════════════════════════════
-function setupChartGestures(canvasId, crosshairId) {
-  const canvas = document.getElementById(canvasId);
-  let pinchStartDist = null;
-  let pinchStartView = null;
-  let longPressTimer = null;
-  let isDragging = false;
-
-  function getTouchDist(touches) {
-    const dx = touches[0].clientX - touches[1].clientX;
-    const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx*dx + dy*dy);
-  }
-
-  function xToIndex(clientX) {
-    const meta = canvas._chartMeta;
-    if (!meta) return null;
+  canvas.addEventListener('click', e => {
+    const pts = canvas._chartPts;
+    if (!pts || !pts.length) return;
     const rect = canvas.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const relX = (x - meta.pad.l) / meta.cW;
-    const idx = Math.round(relX * (meta.data.length - 1));
-    return Math.max(0, Math.min(meta.data.length - 1, idx));
-  }
-
-  canvas.addEventListener('touchstart', e => {
-    if (e.touches.length === 2) {
-      // 雙指縮放開始
-      e.preventDefault();
-      pinchStartDist = getTouchDist(e.touches);
-      pinchStartView = { ...chartView };
-      clearTimeout(longPressTimer);
-    } else if (e.touches.length === 1) {
-      // 可能是長按拖動
-      longPressTimer = setTimeout(() => {
-        isDragging = true;
-        const idx = xToIndex(e.touches[0].clientX);
-        canvas._crosshairIndex = idx;
-        renderChart();
-      }, 280);
-    }
-  }, { passive: false });
-
-  canvas.addEventListener('touchmove', e => {
-    if (e.touches.length === 2 && pinchStartDist !== null) {
-      e.preventDefault();
-      const dist = getTouchDist(e.touches);
-      const scale = pinchStartDist / dist; // >1 = 放大(縮小範圍), <1 = 縮小(擴大範圍)
-      const fullLen = S.navHistory.length;
-      const startLen = pinchStartView.end - pinchStartView.start;
-      const center = (pinchStartView.start + pinchStartView.end) / 2;
-      let newLen = Math.round(startLen * scale);
-      newLen = Math.max(5, Math.min(fullLen, newLen));
-      let newStart = Math.round(center - newLen / 2);
-      let newEnd = newStart + newLen;
-      if (newStart < 0) { newStart = 0; newEnd = newLen; }
-      if (newEnd > fullLen) { newEnd = fullLen; newStart = fullLen - newLen; }
-      chartView.start = newStart;
-      chartView.end = newEnd;
-      renderChart();
-    } else if (e.touches.length === 1 && isDragging) {
-      e.preventDefault();
-      const idx = xToIndex(e.touches[0].clientX);
-      canvas._crosshairIndex = idx;
-      renderChart();
-    }
-  }, { passive: false });
-
-  canvas.addEventListener('touchend', e => {
-    clearTimeout(longPressTimer);
-    pinchStartDist = null;
-    pinchStartView = null;
-    if (isDragging) {
-      isDragging = false;
-      canvas._crosshairIndex = null;
-      renderChart();
-    }
-  });
-  canvas.addEventListener('touchcancel', () => {
-    clearTimeout(longPressTimer);
-    pinchStartDist = null;
-    isDragging = false;
-    canvas._crosshairIndex = null;
-    renderChart();
-  });
-}
-
-
-// ═══════════════════════════════════════════════════════
-// TRADE PAGE
-// ═══════════════════════════════════════════════════════
-let tradeMode = 'buy';
-
-function updateTradeSelect() {
-  const sel = document.getElementById('tSel');
-  const cur_val = sel.value;
-  sel.innerHTML = '<option value="">— 選擇持倉 —</option>' +
-    S.holdings.map(h =>
-      `<option value="${h.symbol}" data-m="${h.market}" data-n="${h.name||''}">${h.symbol}${h.name?' ('+h.name+')':''} — ${fmt(h.shares,4)}股 均${h.avgCost.toFixed(2)}</option>`
-    ).join('');
-  if (cur_val) sel.value = cur_val;
-}
-
-function getTradeSymbol() {
-  return document.getElementById('tSel').value || document.getElementById('tSym').value.trim().toUpperCase();
-}
-
-function updateTradePreview() {
-  const sym    = getTradeSymbol();
-  const shares = parseFloat(document.getElementById('tShares').value);
-  const price  = parseFloat(document.getElementById('tPrice').value);
-  const mkt    = document.getElementById('tMkt').value;
-  const prev   = document.getElementById('tPreview');
-
-  if (!sym || isNaN(shares) || isNaN(price) || shares <= 0 || price <= 0) {
-    prev.classList.remove('on'); return;
-  }
-
-  const c = cur(mkt);
-  const tot = shares * price;
-  const totTWD = toTWD(tot, mkt);
-  const ex = S.holdings.find(h => h.symbol === sym);
-
-  if (tradeMode === 'buy') {
-    let newShares = shares, newAvg = price;
-    if (ex) { newShares = ex.shares + shares; newAvg = (ex.avgCost * ex.shares + price * shares) / newShares; }
-    prev.innerHTML = `交易金額：<strong>${c} ${fmt(tot,2)}（TWD ${fmt(totTWD,0)}）</strong><br>`
-      + (ex ? `原持倉：${fmt(ex.shares,4)} 股 × ${ex.avgCost.toFixed(2)}<br>` : '')
-      + `買入後：<strong>${fmt(newShares,4)} 股，新均價 ${c} ${newAvg.toFixed(2)}</strong>`;
-    prev.classList.add('on');
-  } else {
-    if (!ex) { prev.classList.remove('on'); return; }
-    if (shares > ex.shares + 0.0001) {
-      prev.innerHTML = `<span style="color:var(--loss)">⚠️ 持倉不足（目前 ${fmt(ex.shares,4)} 股）</span>`;
-      prev.classList.add('on'); return;
-    }
-    const pnl = (price - ex.avgCost) * shares;
-    const pnlTWD = toTWD(pnl, mkt);
-    const pct = (price - ex.avgCost) / ex.avgCost * 100;
-    prev.innerHTML = `賣出總額：<strong>${c} ${fmt(tot,2)}（TWD ${fmt(totTWD,0)}）</strong><br>`
-      + `成本均價：${c} ${ex.avgCost.toFixed(2)}，實現損益：<strong style="color:var(--${pnlTWD>=0?'gain':'loss'})">${pnlStr(pnlTWD)}（${pct>=0?'+':''}${pct.toFixed(2)}%）</strong><br>`
-      + `賣出後剩餘：<strong>${fmt(ex.shares - shares, 4)} 股</strong>`;
-    prev.classList.add('on');
-  }
-}
-
-document.getElementById('tSel').addEventListener('change', function() {
-  if (this.value) {
-    const opt = this.options[this.selectedIndex];
-    document.getElementById('tMkt').value = opt.dataset.m || 'US';
-    document.getElementById('tName').value = opt.dataset.n || '';
-    document.getElementById('tSym').value = '';
-  }
-  updateTradePreview();
-});
-document.getElementById('tSym').addEventListener('input', function() {
-  if (this.value) document.getElementById('tSel').value = '';
-  updateTradePreview();
-});
-['tShares','tPrice','tMkt'].forEach(id => document.getElementById(id).addEventListener('input', updateTradePreview));
-
-document.getElementById('typeBuy').addEventListener('click', () => {
-  tradeMode = 'buy';
-  document.getElementById('typeBuy').classList.add('on');
-  document.getElementById('typeSell').classList.remove('on');
-  const b = document.getElementById('tConfirm');
-  b.textContent = '確認買入'; b.className = 'btn-save buy';
-  b.style.cssText = 'width:100%;padding:15px;font-size:15px;margin-top:16px;border-radius:9px';
-  updateTradePreview();
-});
-document.getElementById('typeSell').addEventListener('click', () => {
-  tradeMode = 'sell';
-  document.getElementById('typeSell').classList.add('on');
-  document.getElementById('typeBuy').classList.remove('on');
-  const b = document.getElementById('tConfirm');
-  b.textContent = '確認賣出'; b.className = 'btn-save sell';
-  b.style.cssText = 'width:100%;padding:15px;font-size:15px;margin-top:16px;border-radius:9px';
-  updateTradePreview();
-});
-
-document.getElementById('tConfirm').addEventListener('click', () => {
-  const sym    = getTradeSymbol();
-  const shares = parseFloat(document.getElementById('tShares').value);
-  const price  = parseFloat(document.getElementById('tPrice').value);
-  const mkt    = document.getElementById('tMkt').value;
-  const name   = document.getElementById('tName').value.trim();
-
-  if (!sym || isNaN(shares) || isNaN(price) || shares <= 0 || price <= 0) {
-    toast('請填寫股票代號、股數與價格'); return;
-  }
-
-  if (tradeMode === 'buy') {
-    // 扣閒置現金
-    const costTWD = toTWD(shares * price, mkt);
-    S.cash = Math.max(0, S.cash - costTWD);
-
-    const ex = S.holdings.find(h => h.symbol === sym);
-    if (ex) {
-      const ns = ex.shares + shares;
-      ex.avgCost = (ex.avgCost * ex.shares + price * shares) / ns;
-      ex.shares = ns;
-      if (name) ex.name = name;
-    } else {
-      S.holdings.push({ id: uid(), symbol: sym, name, market: mkt, shares, avgCost: price });
-    }
-    toast(`✓ 買入 ${sym} ${shares}股 @ ${cur(mkt)} ${price}`);
-  } else {
-    const ex = S.holdings.find(h => h.symbol === sym);
-    if (!ex) { toast('找不到持倉'); return; }
-    if (shares > ex.shares + 0.0001) { toast(`持倉不足（${fmt(ex.shares,4)} 股）`); return; }
-
-    const pnl = (price - ex.avgCost) * shares;
-    const pnlTWD = toTWD(pnl, mkt);
-
-    // 賣出回收現金
-    S.cash += toTWD(shares * price, mkt);
-
-    // 新增已實現
-    S.realized.push({
-      id: uid(), symbol: sym, name: ex.name || name, market: mkt,
-      shares, cost: ex.avgCost, sell: price,
-      date: new Date().toISOString().slice(0,10), pnlTWD
+    const DPR  = window.devicePixelRatio || 1;
+    const clickX = (e.clientX - rect.left);
+    // 找最近的點
+    let minDist = 9999, closest = null;
+    pts.forEach(p => {
+      const dist = Math.abs(p.x - clickX);
+      if (dist < minDist) { minDist = dist; closest = p; }
     });
-
-    // 更新持倉
-    const remain = ex.shares - shares;
-    if (remain < 0.0001) S.holdings = S.holdings.filter(h => h.symbol !== sym);
-    else ex.shares = remain;
-
-    toast(`✓ 賣出 ${sym} ${shares}股，損益 ${pnlStr(pnlTWD)}`);
-  }
-
-  // 清空表單
-  ['tSel','tMkt'].forEach(id => { if(id==='tMkt') document.getElementById(id).value='US'; else document.getElementById(id).value=''; });
-  ['tSym','tName','tShares','tPrice'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('tPreview').classList.remove('on');
-
-  saveState();
-  renderAll();
-  updateTradeSelect();
-});
-
-// ═══════════════════════════════════════════════════════
-// HOLDING MODAL
-// ═══════════════════════════════════════════════════════
-let editHoldingId = null;
-
-document.getElementById('btnAddHolding').addEventListener('click', () => {
-  editHoldingId = null;
-  document.getElementById('mHoldingTitle').textContent = '手動新增持倉';
-  ['hSym','hName','hShares','hCost'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('hMkt').value = 'US';
-  document.getElementById('hDel').style.display = 'none';
-  openM('mHolding');
-});
-
-function openEditHolding(id) {
-  const h = S.holdings.find(x => x.id === id);
-  if (!h) return;
-  editHoldingId = id;
-  document.getElementById('mHoldingTitle').textContent = '編輯持倉';
-  document.getElementById('hSym').value = h.symbol;
-  document.getElementById('hName').value = h.name || '';
-  document.getElementById('hMkt').value = h.market;
-  document.getElementById('hShares').value = h.shares;
-  document.getElementById('hCost').value = h.avgCost;
-  document.getElementById('hDel').style.display = 'block';
-  openM('mHolding');
+    if (!closest || minDist > 30) { tooltip.style.display = 'none'; return; }
+    const d = closest.d;
+    const data = getChartData();
+    const idx  = data.indexOf(d);
+    const prev = idx > 0 ? data[idx-1] : null;
+    const navDiff  = prev ? (d.nav||0)-(prev.nav||0) : null;
+    const realDiff = prev ? (d.realized||0)-(prev.realized||0) : null;
+    tooltip.innerHTML =
+      `<strong style="color:var(--text)">${d.date}</strong><br>` +
+      `<span style="color:#3b82f6">淨值 $${fmt(d.nav||0)}</span>${navDiff!==null?` <span style="color:var(--${navDiff>=0?'gain':'loss'})">${navDiff>=0?'+':'-'}$${fmt(Math.abs(navDiff))}</span>`:''}<br>` +
+      `<span style="color:#a78bfa">已實現 ${pnlStr(d.realized||0)}</span>${realDiff!==null?` <span style="color:var(--${realDiff>=0?'gain':'loss'})">${realDiff>=0?'+':'-'}$${fmt(Math.abs(realDiff))}</span>`:''}`;
+    tooltip.style.display = 'block';
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { tooltip.style.display = 'none'; }, 4000);
+  });
 }
 
-document.getElementById('hCancel').addEventListener('click', () => closeM('mHolding'));
-document.getElementById('hSave').addEventListener('click', () => {
-  const sym     = document.getElementById('hSym').value.trim().toUpperCase();
-  const name    = document.getElementById('hName').value.trim();
-  const market  = document.getElementById('hMkt').value;
-  const shares  = parseFloat(document.getElementById('hShares').value);
-  const avgCost = parseFloat(document.getElementById('hCost').value);
-  if (!sym || isNaN(shares) || isNaN(avgCost) || shares <= 0 || avgCost <= 0) { toast('請填寫完整資料'); return; }
 
-  if (editHoldingId) {
-    const h = S.holdings.find(x => x.id === editHoldingId);
-    if (h) Object.assign(h, { symbol: sym, name, market, shares, avgCost });
-  } else {
-    const ex = S.holdings.find(h => h.symbol === sym);
-    if (ex) {
-      const ns = ex.shares + shares;
-      ex.avgCost = (ex.avgCost * ex.shares + avgCost * shares) / ns;
-      ex.shares = ns;
-      if (name) ex.name = name;
-    } else {
-      S.holdings.push({ id: uid(), symbol: sym, name, market, shares, avgCost });
-    }
-  }
-  saveState(); renderAll(); closeM('mHolding');
-  toast(editHoldingId ? '持倉已更新' : '持倉已新增');
-});
-document.getElementById('hDel').addEventListener('click', () => {
-  if (!confirm('確定刪除？')) return;
-  S.holdings = S.holdings.filter(x => x.id !== editHoldingId);
-  saveState(); renderAll(); closeM('mHolding'); toast('持倉已刪除');
-});
-
-// ═══════════════════════════════════════════════════════
-// REALIZED MODAL
-// ═══════════════════════════════════════════════════════
-let editRealizedId = null;
-
-document.getElementById('btnAddRealized').addEventListener('click', () => {
-  editRealizedId = null;
-  document.getElementById('mRealizedTitle').textContent = '手動新增已實現損益';
-  ['rSym','rName','rShares','rCost','rSell'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('rMkt').value = 'US';
-  document.getElementById('rDate').value = new Date().toISOString().slice(0,10);
-  document.getElementById('rDel').style.display = 'none';
-  openM('mRealized');
-});
-
-function openEditRealized(id) {
-  const r = S.realized.find(x => x.id === id);
-  if (!r) return;
-  editRealizedId = id;
-  document.getElementById('mRealizedTitle').textContent = '編輯已實現損益';
-  document.getElementById('rSym').value = r.symbol;
-  document.getElementById('rName').value = r.name || '';
-  document.getElementById('rMkt').value = r.market;
-  document.getElementById('rShares').value = r.shares;
-  document.getElementById('rCost').value = r.cost;
-  document.getElementById('rSell').value = r.sell;
-  document.getElementById('rDate').value = r.date || '';
-  document.getElementById('rDel').style.display = 'block';
-  openM('mRealized');
-}
-
-document.getElementById('rCancel').addEventListener('click', () => closeM('mRealized'));
-document.getElementById('rSave').addEventListener('click', () => {
-  const sym    = document.getElementById('rSym').value.trim().toUpperCase();
-  const name   = document.getElementById('rName').value.trim();
-  const market = document.getElementById('rMkt').value;
-  const shares = parseFloat(document.getElementById('rShares').value);
-  const cost   = parseFloat(document.getElementById('rCost').value);
-  const sell   = parseFloat(document.getElementById('rSell').value);
-  const date   = document.getElementById('rDate').value;
-  if (!sym || isNaN(shares) || isNaN(cost) || isNaN(sell)) { toast('請填寫完整資料'); return; }
-  const pnlTWD = toTWD((sell - cost) * shares, market);
-  if (editRealizedId) {
-    const r = S.realized.find(x => x.id === editRealizedId);
-    if (r) Object.assign(r, { symbol: sym, name, market, shares, cost, sell, date, pnlTWD });
-  } else {
-    S.realized.push({ id: uid(), symbol: sym, name, market, shares, cost, sell, date, pnlTWD });
-  }
-  saveState(); renderAll(); closeM('mRealized');
-  toast(editRealizedId ? '記錄已更新' : '記錄已新增');
-});
-document.getElementById('rDel').addEventListener('click', () => {
-  if (!confirm('確定刪除？')) return;
-  S.realized = S.realized.filter(x => x.id !== editRealizedId);
-  saveState(); renderAll(); closeM('mRealized'); toast('記錄已刪除');
-});
-
-// ═══════════════════════════════════════════════════════
-// SETTINGS
-// ═══════════════════════════════════════════════════════
-// 本金編輯
-document.getElementById('btnEditPrincipal').addEventListener('click', () => {
-  document.getElementById('pInput').value = S.principal || '';
-  openM('mPrincipal');
-});
-document.getElementById('pCancel').addEventListener('click', () => closeM('mPrincipal'));
-document.getElementById('pSave').addEventListener('click', () => {
-  const v = parseFloat(document.getElementById('pInput').value);
-  if (isNaN(v) || v < 0) { toast('請輸入正確金額'); return; }
-  S.principal = v; saveState(); renderAll(); closeM('mPrincipal'); toast('本金已更新');
-});
-
-// 新增資金
-document.getElementById('btnAddFunds').addEventListener('click', () => {
-  document.getElementById('afInput').value = '';
-  document.getElementById('afPreview').textContent = '';
-  openM('mAddFunds');
-});
-document.getElementById('afInput').addEventListener('input', function() {
-  const v = parseFloat(this.value);
-  const prev = document.getElementById('afPreview');
-  if (!isNaN(v) && v > 0) {
-    prev.innerHTML = `本金：<strong>$${fmt(S.principal)}</strong> → <strong>$${fmt(S.principal+v)}</strong><br>閒置現金：<strong>$${fmt(S.cash)}</strong> → <strong>$${fmt(S.cash+v)}</strong>`;
-  } else prev.textContent = '';
-});
-document.getElementById('afCancel').addEventListener('click', () => closeM('mAddFunds'));
-document.getElementById('afSave').addEventListener('click', () => {
-  const v = parseFloat(document.getElementById('afInput').value);
-  if (isNaN(v) || v <= 0) { toast('請輸入正確金額'); return; }
-  S.principal += v; S.cash += v;
-  saveState(); renderAll(); closeM('mAddFunds'); toast(`✓ 已新增 $${fmt(v)}`);
-});
-
-// 閒置現金
-document.getElementById('btnEditCash').addEventListener('click', () => {
-  document.getElementById('cashInput').value = S.cash || '';
-  openM('mCash');
-});
-document.getElementById('cashCancel').addEventListener('click', () => closeM('mCash'));
-document.getElementById('cashSave').addEventListener('click', () => {
-  const v = parseFloat(document.getElementById('cashInput').value);
-  if (isNaN(v) || v < 0) { toast('請輸入正確金額'); return; }
-  S.cash = v; saveState(); renderAll(); closeM('mCash'); toast('閒置現金已更新');
-});
-
-// 匯率
-document.getElementById('btnEditFx').addEventListener('click', () => {
-  document.getElementById('fxInput').value = S.fx;
-  openM('mFx');
-});
-document.getElementById('fxCancel').addEventListener('click', () => closeM('mFx'));
-document.getElementById('fxSave').addEventListener('click', () => {
-  const v = parseFloat(document.getElementById('fxInput').value);
-  if (isNaN(v) || v < 1) { toast('請輸入正確匯率'); return; }
-  S.fx = v; saveState(); renderAll(); closeM('mFx'); toast('匯率已更新');
-});
-
-// 顏色
-document.getElementById('cGreen').addEventListener('click', () => {
-  S.colorMode = 'green-up'; applyColor(); saveState(); renderAll(); toast('已切換：漲綠跌紅');
-});
-document.getElementById('cRed').addEventListener('click', () => {
-  S.colorMode = 'red-up'; applyColor(); saveState(); renderAll(); toast('已切換：漲紅跌綠');
-});
-
-// 匯出
-document.getElementById('btnExport').addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(S, null, 2)], { type:'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `stock-${new Date().toISOString().slice(0,10)}.json`;
-  a.click(); toast('資料已匯出');
-});
-
-// 匯入
-let pendingImport = null;
-document.getElementById('btnImportRow').addEventListener('click', () => document.getElementById('importFile').click());
-document.getElementById('importFile').addEventListener('change', function() {
-  const file = this.files[0]; if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    try {
-      const d = JSON.parse(e.target.result);
-      if (typeof d !== 'object' || !Array.isArray(d.holdings)) { toast('❌ 格式不正確'); return; }
-      pendingImport = d;
-      document.getElementById('importPreview').innerHTML =
-        `本金：<strong>$${fmt(d.principal||d.cash||0)}</strong><br>`+
-        `閒置現金：<strong>$${fmt(d.cash||d.capital||0)}</strong><br>`+
-        `持倉：<strong>${d.holdings.length} 支</strong><br>`+
-        `已實現：<strong>${(d.realized||[]).length} 筆</strong>`;
-      openM('mImport');
-    } catch { toast('❌ 檔案讀取失敗'); }
-    this.value = '';
-  };
-  reader.readAsText(file);
-});
-document.getElementById('importCancel').addEventListener('click', () => { pendingImport = null; closeM('mImport'); });
-document.getElementById('importConfirm').addEventListener('click', () => {
-  if (!pendingImport) return;
-  // 重置 state 再從 JSON 重新載入
-  S = { ...DEFAULT_STATE };
-  localStorage.setItem(KEY, JSON.stringify(pendingImport));
-  loadState(); // 用統一的 loadState 載入，確保格式轉換
-  pendingImport = null;
-  applyColor(); saveState(); renderAll(); closeM('mImport');
-  toast('✓ 資料匯入成功');
-});
-
-// 清除
-document.getElementById('btnClear').addEventListener('click', () => {
-  if (!confirm('確定清除所有資料？此動作無法復原。')) return;
-  localStorage.removeItem(KEY);
-  S = { ...DEFAULT_STATE };
-  renderAll(); toast('資料已清除');
-});
 
 // ═══════════════════════════════════════════════════════
 // NAV + SORT + CHART BUTTONS
@@ -1637,7 +1191,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
     btn.classList.add('on');
     document.getElementById('page-' + btn.dataset.page).classList.add('on');
-    if (btn.dataset.page === 'chart') { resetChartView(); renderChart(); }
+    if (btn.dataset.page === 'chart') renderChart();
   });
 });
 
@@ -1650,22 +1204,28 @@ document.querySelectorAll('#sortBar .pill').forEach(btn => {
   });
 });
 
-document.getElementById('cNavBtn').addEventListener('click', () => {
-  S.chartMode = 'nav';
-  document.getElementById('cNavBtn').classList.add('on');
-  document.getElementById('cTotalBtn').classList.remove('on');
-  saveState(); renderChart();
+// 時間範圍按鈕
+document.querySelectorAll('#chartRangeBar .pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#chartRangeBar .pill').forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+    chartRangeDays = parseInt(btn.dataset.range);
+    document.getElementById('chartTooltip').style.display = 'none';
+    renderChart();
+  });
 });
-document.getElementById('cTotalBtn').addEventListener('click', () => {
-  S.chartMode = 'total';
-  document.getElementById('cTotalBtn').classList.add('on');
-  document.getElementById('cNavBtn').classList.remove('on');
-  saveState(); renderChart();
-});
-document.getElementById('cResetZoom').addEventListener('click', () => {
-  resetChartView();
+
+// 自訂區間套用
+document.getElementById('chartCustomApply').addEventListener('click', () => {
+  const from = document.getElementById('chartDateFrom').value;
+  const to   = document.getElementById('chartDateTo').value;
+  if (!from && !to) { toast('請選擇開始或結束日期'); return; }
+  chartRangeDays  = -1;
+  chartCustomFrom = from;
+  chartCustomTo   = to;
+  document.querySelectorAll('#chartRangeBar .pill').forEach(b => b.classList.remove('on'));
+  document.getElementById('chartTooltip').style.display = 'none';
   renderChart();
-  toast('已還原縮放');
 });
 
 // ═══════════════════════════════════════════════════════
@@ -1728,14 +1288,13 @@ setPagePadding();
 document.querySelectorAll('#sortBar .pill').forEach(b => {
   b.classList.toggle('on', b.dataset.sort === S.sortMode);
 });
-// 同步圖表按鈕
-document.getElementById('cNavBtn').classList.toggle('on', S.chartMode !== 'total');
-document.getElementById('cTotalBtn').classList.toggle('on', S.chartMode === 'total');
+// 設定自訂日期欄位的預設值（最近30天）
+const _today = new Date().toISOString().slice(0,10);
+const _month = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
+document.getElementById('chartDateFrom').value = _month;
+document.getElementById('chartDateTo').value   = _today;
 
-resetChartView();
-setupChartGestures('chartCanvas1', 'crosshair1');
-setupChartGestures('chartCanvas2', 'crosshair2');
-
+setupChartClick();
 renderAll();
 scheduleAuto();
 </script>
